@@ -34,6 +34,10 @@ pub const MAX_CATEGORY_LEVELS: usize = 3;
 pub const MAX_DRAWN_REGIONS: usize = 64;
 /// Most segments in all the loops of a drawn section.
 pub const MAX_DRAWN_SEGMENTS: usize = 4096;
+/// The format a library file declares (`frame.library.export`, `frame.library.import`).
+pub const LIBRARY_FILE_FORMAT: &str = "solidcraft-frame-profiles/1";
+/// Most bytes in a library file: a thousand drawn sections with room to spare.
+pub const MAX_LIBRARY_FILE: usize = 64 << 20;
 
 /// The names of the placement points every profile has, in the order they are listed: the
 /// spellings of [`Anchor`].
@@ -43,7 +47,9 @@ pub const COMMON_POINTS: &[&str] =
 /// One profile of the library.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LibraryProfile {
-    /// Never reused in the design (`lp1`, `lp2`...): what members refer to.
+    /// Never reused in the design (`lp1`, `lp2`...): what members refer to. A library file leaves
+    /// it out: each design gives the profile its own.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     /// Unique ignoring case: `SHS 40x40x3`.
     pub name: String,
@@ -125,6 +131,41 @@ impl LibraryProfile {
     /// The design parameters the entry reads.
     pub fn references(&self) -> Vec<String> {
         self.exprs().into_iter().flat_map(|(_, e)| crate::expr::references(e)).collect()
+    }
+
+    /// The same entry as `other`, apart from its id.
+    pub fn same_as(&self, other: &LibraryProfile) -> bool {
+        LibraryProfile { id: other.id.clone(), ..self.clone() } == *other
+    }
+
+    /// The entry with each expression that reads a design parameter replaced by its value
+    /// (`eval`, given its label, expression and kind, returning millimetres or radians), so it
+    /// means the same in any design.
+    pub fn portable(&self, mut eval: impl FnMut(&str, &Expr, crate::expr::Kind) -> Result<f64>) -> Result<LibraryProfile> {
+        let mut out = self.clone();
+        let labels: Vec<(&str, crate::expr::Kind)> = self.exprs().into_iter().map(|(label, _)| label).zip(self.expr_kinds()).collect();
+        for ((label, kind), e) in labels.into_iter().zip(out.exprs_mut()) {
+            if !crate::expr::references(e).is_empty() {
+                let v = eval(label, e, kind)?;
+                *e = Expr::new(match kind {
+                    crate::expr::Kind::Angle => format!("{} deg", v.to_degrees()),
+                    _ => format!("{v} mm"),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// What each expression [`LibraryProfile::exprs`] lists measures, in the same order.
+    fn expr_kinds(&self) -> Vec<crate::expr::Kind> {
+        let mut out = Vec::new();
+        if let LibrarySection::BuiltIn { profile } = &self.section {
+            out.extend(profile.dims.keys().map(|name| frame::dimension_kind(name)));
+        }
+        if self.stock_length.is_some() {
+            out.push(crate::expr::Kind::Length);
+        }
+        out
     }
 
     /// The entry worked out: each expression by `eval` (given its label, expression and kind,
@@ -371,6 +412,73 @@ pub fn next_id(library: &[LibraryProfile]) -> String {
 /// The entry `key` names: by id, then by name ignoring case.
 pub fn find<'a>(library: &'a [LibraryProfile], key: &str) -> Option<&'a LibraryProfile> {
     library.iter().find(|p| p.id == key).or_else(|| library.iter().find(|p| p.name.eq_ignore_ascii_case(key.trim())))
+}
+
+/// Adds `incoming` to `library`. An entry the same as it apart from its id is reused; a name the
+/// library has already (ignoring case) takes ` (2)`, ` (3)`…; the id is the library's next. Returns
+/// the entry's id in the library and whether an existing entry was reused.
+pub fn merge(library: &mut Vec<LibraryProfile>, mut incoming: LibraryProfile) -> Result<(String, bool)> {
+    if let Some(e) = library.iter().find(|e| e.same_as(&incoming)) {
+        return Ok((e.id.clone(), true));
+    }
+    if library.len() >= MAX_LIBRARY_PROFILES {
+        return Err(invalid(format!("the library holds at most {MAX_LIBRARY_PROFILES} profiles")));
+    }
+    let base = incoming.name.clone();
+    let taken = |n: &str| library.iter().any(|e| e.name.eq_ignore_ascii_case(n));
+    if taken(&base) {
+        incoming.name = (2..=MAX_LIBRARY_PROFILES + 1)
+            .map(|i| format!("{base} ({i})"))
+            .find(|n| !taken(n))
+            .filter(|n| n.len() <= MAX_LIBRARY_NAME)
+            .ok_or_else(|| invalid(format!("the library has `{base}` already, and no shorter name is free")))?;
+    }
+    incoming.id = next_id(library);
+    let id = incoming.id.clone();
+    library.push(incoming);
+    Ok((id, false))
+}
+
+/// A library file: profiles to share between designs and people, each meaning the same wherever it
+/// is read (no design parameters; see [`LibraryProfile::portable`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryFile {
+    /// [`LIBRARY_FILE_FORMAT`].
+    pub format: String,
+    pub profiles: Vec<LibraryProfile>,
+}
+
+impl LibraryFile {
+    /// A library file of `profiles`, without their design ids.
+    pub fn new(profiles: Vec<LibraryProfile>) -> LibraryFile {
+        LibraryFile {
+            format: LIBRARY_FILE_FORMAT.to_string(),
+            profiles: profiles.into_iter().map(|e| LibraryProfile { id: String::new(), ..e }).collect(),
+        }
+    }
+
+    /// A library file read from JSON: its format, at most [`MAX_LIBRARY_PROFILES`] entries, each
+    /// one valid, and names unique ignoring case.
+    pub fn from_json(v: serde_json::Value) -> Result<LibraryFile> {
+        let format = v.get("format").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+        if format != LIBRARY_FILE_FORMAT {
+            return Err(invalid(format!("not a profile library: the format must be `{LIBRARY_FILE_FORMAT}`")));
+        }
+        let count = v.get("profiles").and_then(serde_json::Value::as_array).map_or(0, Vec::len);
+        if count > MAX_LIBRARY_PROFILES {
+            return Err(invalid(format!("a library file holds at most {MAX_LIBRARY_PROFILES} profiles, not {count}")));
+        }
+        let file: LibraryFile = serde_json::from_value(v).map_err(|e| invalid(format!("the profile library is not readable: {e}")))?;
+        let mut seen = std::collections::HashSet::new();
+        for e in &file.profiles {
+            e.check().map_err(|err| invalid(format!("profile `{}`: {err}", e.name)))?;
+            if !seen.insert(e.name.to_lowercase()) {
+                return Err(invalid(format!("the library file names `{}` twice", e.name)));
+            }
+        }
+        Ok(file)
+    }
 }
 
 impl crate::Document {

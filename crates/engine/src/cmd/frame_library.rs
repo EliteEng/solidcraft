@@ -1,21 +1,29 @@
 //! The design's profile library (#4003): `frame.library.list`, `.add`, `.edit`, `.remove` and
-//! `.replace` keep the named frame profiles members are made from, and `frame.profile.points` lists
-//! a profile's placement points. A member made from a library profile (`frame.member` with
+//! `.replace` keep the named frame profiles members are made from, `.import` and `.export` move them
+//! through library files (`solidcraft-frame-profiles/1`), and `frame.profile.points` lists a
+//! profile's placement points. A member made from a library profile (`frame.member` with
 //! `library`) follows every edit to it.
+//!
+//! The personal library (`frame.personal.*`) is the app's, kept with its preferences and offered in
+//! every design. The engine holds no preferences, so those commands only check their parameters and
+//! read what they are given (a design's entry, a library file); the desktop and web apps act on the
+//! reply (`frame_personal` in the UI crate). Run without an app, they change nothing.
 
 use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 use solidcraft_doc::expr::Kind;
 use solidcraft_doc::frame::{self, MemberProfile, ProfileSpec};
-use solidcraft_doc::frame_library::{self as library, LibraryProfile, LibrarySection, MAX_LIBRARY_PROFILES, NamedPoint};
+use solidcraft_doc::frame_library::{self as library, LibraryFile, LibraryProfile, LibrarySection, MAX_LIBRARY_PROFILES, NamedPoint};
 
 use super::CommandSpec;
 use crate::params::bad;
 use crate::schema::frame::ProfileOut;
 use crate::schema::frame_library::{
-    LibraryAddParams, LibraryEditParams, LibraryEntryOut, LibraryEntryResult, LibraryFeatureError, LibraryListParams, LibraryListResult,
-    LibraryRemoveParams, LibraryRemoveResult, LibraryReplaceParams, LibraryReplaceResult, PointOut, PointParam, ProfilePointsParams,
-    ProfilePointsResult, SectionOut, typed,
+    EntryJson, ImportedOut, LibraryAddParams, LibraryEditParams, LibraryEntryOut, LibraryEntryResult, LibraryExportParams, LibraryExportResult,
+    LibraryFeatureError, LibraryFileJson, LibraryImportParams, LibraryImportResult, LibraryListParams, LibraryListResult, LibraryRemoveParams,
+    LibraryRemoveResult, LibraryReplaceParams, LibraryReplaceResult, PersonalAddParams, PersonalExportParams, PersonalListParams,
+    PersonalProfilesResult, PersonalRemoveParams, PersonalRemoveResult, PointOut, PointParam, ProfilePointsParams, ProfilePointsResult, SectionOut,
+    typed,
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
@@ -30,6 +38,12 @@ const EDIT_CONTRACT: TypedContract<LibraryEditParams> = TypedContract::new();
 const REMOVE_CONTRACT: TypedContract<LibraryRemoveParams> = TypedContract::new();
 const REPLACE_CONTRACT: TypedContract<LibraryReplaceParams> = TypedContract::new();
 const POINTS_CONTRACT: TypedContract<ProfilePointsParams> = TypedContract::new();
+const IMPORT_CONTRACT: TypedContract<LibraryImportParams> = TypedContract::new();
+const EXPORT_CONTRACT: TypedContract<LibraryExportParams> = TypedContract::new();
+const PERSONAL_LIST_CONTRACT: TypedContract<PersonalListParams> = TypedContract::new();
+const PERSONAL_ADD_CONTRACT: TypedContract<PersonalAddParams> = TypedContract::new();
+const PERSONAL_REMOVE_CONTRACT: TypedContract<PersonalRemoveParams> = TypedContract::new();
+const PERSONAL_EXPORT_CONTRACT: TypedContract<PersonalExportParams> = TypedContract::new();
 
 /// The keys add and edit share, as their parameter docs list them.
 macro_rules! entry_doc {
@@ -81,6 +95,46 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&POINTS_CONTRACT)
         .output(output_schema_for::<ProfilePointsResult>)
         .params("profile: a built-in profile | library: a library profile's id or name, one of them. Returns points: [{name, at: [x, y] mm}]: every placement point, those every profile has (origin, center, centroid, the corners and edge middles of its bounding box), then those its kind generates (an angle's heel, heel_inside, toe_x…), then those a library profile names"),
+    CommandSpec::new("frame.library.import", "Import Library Profiles", crate::checked!("frame.library.import", import))
+        .icon("import")
+        .contract(&IMPORT_CONTRACT)
+        .output(output_schema_for::<LibraryImportResult>)
+        .params("path: a library file | library: the library itself ({format: \"solidcraft-frame-profiles/1\", profiles: [...]}), one of them; names?: [only these profiles]. Adds its profiles to the design's library: a profile the library has already (the same apart from its id) is reused, a name it has for another profile takes ` (2)`…. Returns profiles: [{from, id, name, reused}]"),
+    CommandSpec::new("frame.library.export", "Export Library Profiles", crate::checked!("frame.library.export", export))
+        .icon("export")
+        .noundo()
+        .doc_only()
+        .contract(&EXPORT_CONTRACT)
+        .output(output_schema_for::<LibraryExportResult>)
+        .params("ids?: [profiles by id or name; default all], path?: file → library (a `solidcraft-frame-profiles/1` file), written to `path` when given; never opens a dialog. Expressions that read the design's parameters are written as their values"),
+    CommandSpec::new("frame.personal.list", "Personal Library Profiles", crate::checked!("frame.personal.list", personal_list))
+        .icon("library")
+        .noundo()
+        .doc_only()
+        .contract(&PERSONAL_LIST_CONTRACT)
+        .output(output_schema_for::<PersonalProfilesResult>)
+        .params("Returns profiles: [entries as saved]: the personal library, kept by the app and offered in every design (empty without an app). frame.member takes an entry as `library`, adding it to the design's library"),
+    CommandSpec::new("frame.personal.add", "Add to Personal Library", crate::checked!("frame.personal.add", personal_add))
+        .icon("library")
+        .noundo()
+        .doc_only()
+        .contract(&PERSONAL_ADD_CONTRACT)
+        .output(output_schema_for::<PersonalProfilesResult>)
+        .params("id: a profile of the design's library | path: a library file | library: the library itself, one of them; replace?: bool (default false: a personal profile of the same name is refused). Returns profiles: [the entries added]; expressions that read the design's parameters are kept as their values"),
+    CommandSpec::new("frame.personal.remove", "Remove from Personal Library", crate::checked!("frame.personal.remove", personal_remove))
+        .icon("library")
+        .noundo()
+        .doc_only()
+        .contract(&PERSONAL_REMOVE_CONTRACT)
+        .output(output_schema_for::<PersonalRemoveResult>)
+        .params("name → removed; designs that use the profile keep their own copy"),
+    CommandSpec::new("frame.personal.export", "Export Personal Library", crate::checked!("frame.personal.export", personal_export))
+        .icon("export")
+        .noundo()
+        .doc_only()
+        .contract(&PERSONAL_EXPORT_CONTRACT)
+        .output(output_schema_for::<LibraryExportResult>)
+        .params("names?: [personal profiles; default all], path?: file → library (a `solidcraft-frame-profiles/1` file), written to `path` when given; never opens a dialog"),
 ];
 
 fn reply(cmd: &str, r: impl serde::Serialize) -> Result<Value> {
@@ -414,4 +468,173 @@ fn points(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn member_profile(s: &Session, cmd: &str, key: &str) -> Result<(MemberProfile, String)> {
     let e = find(s, cmd, key)?;
     Ok((MemberProfile::LibraryProfile { id: e.id.clone() }, e.name))
+}
+
+/// A whole entry a `frame.member` call gives as `library` (a personal profile): the design's library
+/// with it added (or the same entry there reused), the member's profile and its name. The caller
+/// keeps the library once the member is made.
+pub(super) fn member_entry(s: &Session, cmd: &str, v: &Value) -> Result<(Vec<LibraryProfile>, MemberProfile, String)> {
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.insert("id".into(), json!(""));
+    }
+    let e: LibraryProfile = serde_json::from_value(v).map_err(|err| bad(cmd, format!("`library`: {err}")))?;
+    e.check().map_err(|err| bad(cmd, format!("`library`: {err}")))?;
+    admit(s, cmd, &e)?;
+    let mut lib = s.doc.frame_profiles.clone();
+    let (id, _) = library::merge(&mut lib, e).map_err(|err| bad(cmd, err.to_string()))?;
+    let name = lib.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
+    Ok((lib, MemberProfile::LibraryProfile { id }, name))
+}
+
+/// Length expressions worked out in this design, for [`LibraryProfile::resolve`] and
+/// [`LibraryProfile::portable`].
+fn mm(s: &Session) -> impl FnMut(&str, &solidcraft_doc::Expr, Kind) -> solidcraft_doc::Result<f64> + '_ {
+    move |label, ex, kind| value(s, ex, kind).map_err(|err| solidcraft_doc::DocError::Invalid(format!("`{label}`: {err}")))
+}
+
+/// An entry coming into this design works out here as one piece, with its default point.
+fn admit(s: &Session, cmd: &str, e: &LibraryProfile) -> Result<()> {
+    let r = e.resolve(mm(s)).map_err(|err| bad(cmd, format!("{}: {err}", e.name)))?;
+    if r.regions.len() != 1 {
+        return Err(bad(cmd, format!("{}: the section is {} separate pieces, not one", e.name, r.regions.len())));
+    }
+    if let Some(point) = &e.default_point {
+        library::find_point(&r.points, point).map_err(|err| bad(cmd, format!("{}: `default_point`: {err}", e.name)))?;
+    }
+    Ok(())
+}
+
+/// A library file: read from `path`, or given as `library`.
+fn library_from(cmd: &str, path: &Option<String>, given: &Option<LibraryFileJson>) -> Result<LibraryFile> {
+    match (path, given) {
+        (Some(path), None) => {
+            let bytes = solidcraft_io::vfs::read(path, library::MAX_LIBRARY_FILE).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+            let v: Value = serde_json::from_slice(&bytes).map_err(|e| bad(cmd, format!("{path}: not a JSON file: {e}")))?;
+            LibraryFile::from_json(v).map_err(|e| bad(cmd, format!("{path}: {e}")))
+        }
+        (None, Some(v)) => LibraryFile::from_json(v.0.clone()).map_err(|e| bad(cmd, format!("`library`: {e}"))),
+        _ => Err(bad(cmd, "give `path` (a library file) or `library` (the library itself), one of them")),
+    }
+}
+
+const BAD_PATH: &str = "`path` must be a file path of at most 4096 bytes";
+
+fn import(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.library.import";
+    let a: LibraryImportParams = typed(cmd, p)?;
+    if !a.path_ok() {
+        return Err(bad(cmd, BAD_PATH));
+    }
+    let file = library_from(cmd, &a.path, &a.library)?;
+    if let Some(names) = &a.names
+        && let Some(missing) = names.iter().find(|n| !file.profiles.iter().any(|e| e.name.eq_ignore_ascii_case(n.trim())))
+    {
+        let there: Vec<&str> = file.profiles.iter().map(|e| e.name.as_str()).collect();
+        return Err(bad(cmd, format!("the library file has no profile `{missing}` (it has {})", there.join(", "))));
+    }
+    let wanted: Vec<LibraryProfile> = file
+        .profiles
+        .into_iter()
+        .filter(|e| a.names.as_ref().is_none_or(|names| names.iter().any(|n| n.trim().eq_ignore_ascii_case(&e.name))))
+        .collect();
+    if wanted.is_empty() {
+        return Err(bad(cmd, "the library file has no profiles"));
+    }
+    let mut lib = s.doc.frame_profiles.clone();
+    let mut profiles = Vec::new();
+    for e in wanted {
+        admit(s, cmd, &e)?;
+        let from = e.name.clone();
+        let (id, reused) = library::merge(&mut lib, e).map_err(|err| bad(cmd, err.to_string()))?;
+        let name = lib.iter().find(|x| x.id == id).map(|x| x.name.clone()).unwrap_or_default();
+        profiles.push(ImportedOut { from, id, name, reused });
+    }
+    if lib != s.doc.frame_profiles {
+        s.doc_mut().frame_profiles = lib;
+        s.refresh();
+    }
+    reply(cmd, LibraryImportResult { profiles, param_warnings: Vec::new() })
+}
+
+/// `file` as a reply, written to `path` when there is one.
+fn write_library(cmd: &str, file: &LibraryFile, path: Option<String>) -> Result<Value> {
+    if let Some(path) = &path {
+        let text = serde_json::to_string_pretty(file).map_err(|e| bad(cmd, e.to_string()))?;
+        solidcraft_io::vfs::write(path, text.as_bytes()).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    }
+    let library = LibraryFileJson(serde_json::to_value(file).map_err(|e| bad(cmd, e.to_string()))?);
+    reply(cmd, LibraryExportResult { library, names: None, path, param_warnings: Vec::new() })
+}
+
+fn export(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.library.export";
+    let a: LibraryExportParams = typed(cmd, p)?;
+    if !a.path_ok() {
+        return Err(bad(cmd, BAD_PATH));
+    }
+    let mut entries: Vec<LibraryProfile> = match &a.ids {
+        None => s.doc.frame_profiles.clone(),
+        Some(ids) => ids.iter().map(|k| find(s, cmd, k)).collect::<Result<_>>()?,
+    };
+    let mut seen = std::collections::HashSet::new();
+    entries.retain(|e| seen.insert(e.id.clone()));
+    if entries.is_empty() {
+        return Err(bad(cmd, "the library is empty: there is nothing to export"));
+    }
+    let profiles = entries.iter().map(|e| e.portable(mm(s)).map_err(|err| bad(cmd, format!("{}: {err}", e.name)))).collect::<Result<Vec<_>>>()?;
+    write_library(cmd, &LibraryFile::new(profiles), a.path)
+}
+
+fn personal_list(_s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.personal.list";
+    let _: PersonalListParams = typed(cmd, p)?;
+    reply(cmd, PersonalProfilesResult { profiles: Vec::new(), replace: false, param_warnings: Vec::new() })
+}
+
+fn personal_add(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.personal.add";
+    let a: PersonalAddParams = typed(cmd, p)?;
+    if !a.path_ok() {
+        return Err(bad(cmd, BAD_PATH));
+    }
+    let entries = match (&a.id, &a.path, &a.library) {
+        (Some(key), None, None) => {
+            let e = find(s, cmd, key)?;
+            vec![e.portable(mm(s)).map_err(|err| bad(cmd, format!("{}: {err}", e.name)))?]
+        }
+        (None, _, _) => library_from(cmd, &a.path, &a.library)?.profiles,
+        _ => return Err(bad(cmd, "give `id` (a profile of the design's library), `path` (a library file) or `library`, one of them")),
+    };
+    let profiles = entries.iter().map(|e| serde_json::to_value(e).map(EntryJson).map_err(|err| bad(cmd, err.to_string()))).collect::<Result<_>>()?;
+    reply(cmd, PersonalProfilesResult { profiles, replace: a.replace.unwrap_or(false), param_warnings: Vec::new() })
+}
+
+/// A personal profile's name as given: trimmed, 1…96 bytes.
+fn personal_name<'a>(cmd: &str, name: &'a str) -> Result<&'a str> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > library::MAX_LIBRARY_NAME {
+        return Err(bad(cmd, format!("a personal profile's name is 1…{} bytes", library::MAX_LIBRARY_NAME)));
+    }
+    Ok(name)
+}
+
+fn personal_remove(_s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.personal.remove";
+    let a: PersonalRemoveParams = typed(cmd, p)?;
+    let removed = personal_name(cmd, &a.name)?.to_string();
+    reply(cmd, PersonalRemoveResult { removed, param_warnings: Vec::new() })
+}
+
+fn personal_export(_s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.personal.export";
+    let a: PersonalExportParams = typed(cmd, p)?;
+    if !a.path_ok() {
+        return Err(bad(cmd, BAD_PATH));
+    }
+    let names = a.names.map(|names| names.iter().map(|n| personal_name(cmd, n).map(str::to_string)).collect::<Result<Vec<_>>>()).transpose()?;
+    // Without an app there is no personal library, so the file is empty and nothing is written; the
+    // app fills it from `names` and writes it to `path`.
+    let library = LibraryFileJson(json!({"format": library::LIBRARY_FILE_FORMAT, "profiles": []}));
+    reply(cmd, LibraryExportResult { library, names, path: a.path, param_warnings: Vec::new() })
 }

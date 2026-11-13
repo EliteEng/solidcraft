@@ -269,6 +269,209 @@ pub struct ProfilePointsResult {
     pub param_warnings: Vec<String>,
 }
 
+/// A profile library file's JSON as given (`{"format": "solidcraft-frame-profiles/1", "profiles":
+/// [...]}`); the handler reads and checks it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct LibraryFileJson(pub Value);
+
+impl JsonSchema for LibraryFileJson {
+    fn schema_name() -> Cow<'static, str> {
+        "FrameProfileLibraryFile".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "A profile library: {\"format\": \"solidcraft-frame-profiles/1\", \"profiles\": [entries as frame.personal.list holds them]}.",
+            "type": "object",
+            "required": ["format", "profiles"]
+        })
+    }
+}
+
+/// One library profile as it is saved (`{id, name, category, section, points, default_point,
+/// material, description, stock_length}`).
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct EntryJson(pub Value);
+
+impl JsonSchema for EntryJson {
+    fn schema_name() -> Cow<'static, str> {
+        "FrameLibraryEntry".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "A library profile as it is saved: {id, name, category?, section, points?, default_point?, material?, description?, stock_length?}.",
+            "type": "object",
+            "required": ["name", "section"]
+        })
+    }
+}
+
+/// A file path as the library commands read `path`: not blank, at most 4096 bytes.
+fn path_ok(path: &Option<String>) -> bool {
+    path.as_ref().is_none_or(|p| !p.trim().is_empty() && p.len() <= 4096)
+}
+
+/// Add the profiles of a library file to the design's library: from `path`, or `library` given
+/// inline. One of them.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryImportParams {
+    /// The library file to read.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The library itself.
+    #[serde(default)]
+    pub library: Option<LibraryFileJson>,
+    /// Only these of its profiles, by name. Default: all of them.
+    #[serde(default)]
+    pub names: Option<Vec<String>>,
+}
+
+impl LibraryImportParams {
+    pub fn path_ok(&self) -> bool {
+        path_ok(&self.path)
+    }
+}
+
+/// Write profiles of the design's library as a library file. Expressions that read the design's
+/// parameters are written as their values, so the file means the same in any design.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryExportParams {
+    /// The profiles to write, by id or name. Default: all of them.
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
+    /// Where to write the file. Default: nowhere (the reply holds it).
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+impl LibraryExportParams {
+    pub fn path_ok(&self) -> bool {
+        path_ok(&self.path)
+    }
+}
+
+/// List the personal profile library (kept by the app, offered in every design).
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalListParams {}
+
+/// Add profiles to the personal library: a profile of the design's library (`id`), or the profiles
+/// of a library file (`path` or `library`). One of them.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalAddParams {
+    /// A profile of the design's library, by id or name. Expressions that read the design's
+    /// parameters are kept as their values.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// A library file to read.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// A library given inline.
+    #[serde(default)]
+    pub library: Option<LibraryFileJson>,
+    /// A personal profile of the same name is replaced. Default: false, and such a name is refused.
+    #[serde(default)]
+    pub replace: Option<bool>,
+}
+
+impl PersonalAddParams {
+    pub fn path_ok(&self) -> bool {
+        path_ok(&self.path)
+    }
+}
+
+/// Remove a profile from the personal library. Designs that use it keep their own copy.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalRemoveParams {
+    /// The personal profile, by name.
+    pub name: String,
+}
+
+/// Write profiles of the personal library as a library file.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalExportParams {
+    /// The profiles to write, by name. Default: all of them.
+    #[serde(default)]
+    pub names: Option<Vec<String>>,
+    /// Where to write the file. Default: nowhere (the reply holds it).
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+impl PersonalExportParams {
+    pub fn path_ok(&self) -> bool {
+        path_ok(&self.path)
+    }
+}
+
+/// A profile a library file brought into the design.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ImportedOut {
+    /// Its name in the file.
+    pub from: String,
+    /// Its id in the design's library.
+    pub id: String,
+    /// Its name in the design's library (` (2)`… when the library had the name for another profile).
+    pub name: String,
+    /// The design's library had the same profile already, and it is used.
+    pub reused: bool,
+}
+
+/// What `frame.library.import` returns.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct LibraryImportResult {
+    pub profiles: Vec<ImportedOut>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
+/// What `frame.library.export` and `frame.personal.export` return: the library file, and where it
+/// was written.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct LibraryExportResult {
+    pub library: LibraryFileJson,
+    /// `frame.personal.export`: the personal profiles asked for, by name, for the app to write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
+/// What `frame.personal.list` and `frame.personal.add` return: personal profiles (the whole
+/// library, or those added).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PersonalProfilesResult {
+    pub profiles: Vec<EntryJson>,
+    /// With `frame.personal.add`: personal profiles of the same names are replaced.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replace: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
+/// What `frame.personal.remove` returns.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PersonalRemoveResult {
+    /// The removed profile's name.
+    pub removed: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
 #[cfg(test)]
 #[path = "frame_library_tests.rs"]
 mod tests;

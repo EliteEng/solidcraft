@@ -285,3 +285,132 @@ fn bad_library_calls_are_refused_with_the_reason() {
     assert_eq!(s.doc.frame_profiles.len(), 1, "nothing was added");
     assert!(bodies(&mut s).is_empty(), "no member was made");
 }
+
+/// A design's library with a parameter-driven tube and an angle, exported as a library file.
+fn exported_library() -> Value {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "t", "expression": "3 mm"}));
+    run(
+        &mut s,
+        "frame.library.add",
+        json!({"name": "SHS 40", "category": ["Steel", "SHS"], "profile": {"kind": "rect_tube", "width": 40, "height": 40, "wall": "t", "outer_radius": 0}}),
+    );
+    run(
+        &mut s,
+        "frame.library.add",
+        json!({"name": "L50", "profile": {"kind": "angle", "width": 50, "height": 50, "thickness": 5}, "default_point": "heel"}),
+    );
+    run(&mut s, "frame.library.export", json!({}))["library"].clone()
+}
+
+#[test]
+fn library_files_carry_profiles_between_designs() {
+    let file = exported_library();
+    assert_eq!(file["format"], "solidcraft-frame-profiles/1");
+    assert_eq!(file["profiles"][0]["section"]["profile"]["wall"], "3 mm", "a parameter is written as its value: {file}");
+    assert_eq!(file["profiles"][1]["section"]["profile"]["thickness"], "5", "plain values stay as they are: {file}");
+    // Another design, which has a different profile called SHS 40 already.
+    let mut s = Session::default();
+    rail(&mut s);
+    run(&mut s, "frame.library.add", json!({"name": "shs 40", "profile": sharp_tube(40.0, 2.0)}));
+    let imported = run(&mut s, "frame.library.import", json!({"library": file}));
+    assert_eq!(
+        imported["profiles"],
+        json!([{"from": "SHS 40", "id": "lp2", "name": "SHS 40 (2)", "reused": false}, {"from": "L50", "id": "lp3", "name": "L50", "reused": false}]),
+        "{imported}"
+    );
+    run(&mut s, "frame.member", json!({"sketch": "Rail", "library": "SHS 40 (2)"}));
+    assert!(rel(total_volume(&mut s), sharp_area(40.0, 3.0) * 1000.0) < 1e-9, "{}", total_volume(&mut s));
+    // The same file again adds nothing: each profile is there already.
+    let again = run(&mut s, "frame.library.import", json!({"library": file, "names": ["l50"]}));
+    assert_eq!(again["profiles"], json!([{"from": "L50", "id": "lp3", "name": "L50", "reused": true}]), "{again}");
+    assert_eq!(s.doc.frame_profiles.len(), 3);
+    // Undo takes the import back; the file round-trips through a path too.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.frame_profiles.len(), 1, "undo removes the imported profiles");
+    let dir = std::env::temp_dir().join(format!("solidcraft-frame-library-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("stock.json").to_string_lossy().to_string();
+    let mut a = Session::default();
+    a.execute("frame.library.import", &json!({"library": file})).unwrap();
+    let written = run(&mut a, "frame.library.export", json!({"ids": ["L50", "lp2", "l50"], "path": path}));
+    assert_eq!(written["path"], json!(path));
+    assert_eq!(written["library"]["profiles"].as_array().map(Vec::len), Some(1), "a profile named twice is written once: {written}");
+    let read = run(&mut s, "frame.library.import", json!({"path": path}));
+    assert_eq!(read["profiles"][0]["name"], "L50", "{read}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_member_takes_a_whole_library_profile_and_adds_it_once() {
+    let file = exported_library();
+    let entry = file["profiles"][0].clone();
+    let mut s = Session::default();
+    rail(&mut s);
+    run(&mut s, "frame.member", json!({"sketch": "Rail", "library": entry}));
+    assert_eq!(s.doc.frame_profiles.len(), 1, "the profile joins the design's library");
+    assert_eq!((s.doc.frame_profiles[0].id.as_str(), s.doc.frame_profiles[0].name.as_str()), ("lp1", "SHS 40"));
+    assert_eq!(bodies(&mut s)[0].0, "SHS 40", "members are named after it");
+    assert!(rel(total_volume(&mut s), sharp_area(40.0, 3.0) * 1000.0) < 1e-9);
+    // A second member from the same entry uses the design's copy.
+    run(&mut s, "frame.member", json!({"sketch": "Rail", "library": entry}));
+    assert_eq!(s.doc.frame_profiles.len(), 1, "the same profile is not added twice");
+    // A member that can't be made leaves the library as it was.
+    let other = file["profiles"][1].clone();
+    refused(&mut s, "frame.member", json!({"sketch": "Rail", "library": other, "point": "nowhere"}), "no placement point `nowhere`");
+    assert_eq!(s.doc.frame_profiles.len(), 1, "a refused member adds no profile");
+    let mut broken = entry.clone();
+    broken["section"]["profile"]["wall"] = json!("missing_param");
+    refused(&mut s, "frame.member", json!({"sketch": "Rail", "library": broken}), "SHS 40");
+    // Editing the member keeps it on the design's copy; undo takes the first member and its profile back.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.frame_profiles.is_empty(), "undo removes the profile the member added");
+}
+
+#[test]
+fn personal_library_commands_check_and_read_what_they_are_given() {
+    let file = exported_library();
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "w", "expression": "60 mm"}));
+    run(&mut s, "frame.library.add", json!({"name": "RHS", "profile": {"kind": "rect_tube", "width": "w", "height": 30, "wall": 2}}));
+    assert_eq!(run(&mut s, "frame.personal.list", json!({})), json!({"profiles": []}), "without an app the personal library is empty");
+    let added = run(&mut s, "frame.personal.add", json!({"id": "rhs"}));
+    assert_eq!(added["profiles"][0]["name"], "RHS");
+    assert_eq!(added["profiles"][0]["section"]["profile"]["width"], "60 mm", "a parameter is kept as its value: {added}");
+    assert!(added.get("replace").is_none());
+    let from_file = run(&mut s, "frame.personal.add", json!({"library": file, "replace": true}));
+    assert_eq!(from_file["profiles"].as_array().map(Vec::len), Some(2));
+    assert_eq!(from_file["replace"], true);
+    assert_eq!(run(&mut s, "frame.personal.remove", json!({"name": "  RHS "})), json!({"removed": "RHS"}));
+    let exported = run(&mut s, "frame.personal.export", json!({"names": ["RHS"]}));
+    assert_eq!(exported["library"]["format"], "solidcraft-frame-profiles/1");
+    refused(&mut s, "frame.personal.add", json!({"id": "RHS", "library": file}), "one of them");
+    refused(&mut s, "frame.personal.add", json!({}), "give `path`");
+    refused(&mut s, "frame.personal.remove", json!({"name": "  "}), "1…96 bytes");
+    refused(&mut s, "frame.personal.export", json!({"path": " "}), "`path`");
+}
+
+#[test]
+fn bad_library_files_are_refused_with_the_reason() {
+    let file = exported_library();
+    let mut s = Session::default();
+    let mut wrong = file.clone();
+    wrong["format"] = json!("something-else/1");
+    refused(&mut s, "frame.library.import", json!({"library": wrong}), "solidcraft-frame-profiles/1");
+    let mut twice = file.clone();
+    twice["profiles"][1]["name"] = json!("shs 40");
+    refused(&mut s, "frame.library.import", json!({"library": twice}), "names `shs 40` twice");
+    let mut bad_entry = file.clone();
+    bad_entry["profiles"][1]["category"] = json!(["a", "b", "c", "d"]);
+    refused(&mut s, "frame.library.import", json!({"library": bad_entry}), "category levels");
+    let mut unknown_param = file.clone();
+    unknown_param["profiles"][0]["section"]["profile"]["wall"] = json!("q");
+    refused(&mut s, "frame.library.import", json!({"library": unknown_param}), "SHS 40");
+    refused(&mut s, "frame.library.import", json!({"library": file, "names": ["Nope"]}), "no profile `Nope`");
+    refused(&mut s, "frame.library.import", json!({"library": file, "path": "x.json"}), "one of them");
+    refused(&mut s, "frame.library.import", json!({"path": "/no/such/dir/stock.json"}), "/no/such/dir/stock.json");
+    refused(&mut s, "frame.library.export", json!({}), "the library is empty");
+    assert!(s.doc.frame_profiles.is_empty(), "nothing was imported");
+}

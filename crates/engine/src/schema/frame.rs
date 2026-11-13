@@ -564,8 +564,9 @@ impl JsonSchema for MemberNames {
     }
 }
 
-/// A library profile's id or name as `frame.member` reads `library`: text that isn't blank. Whether
-/// the library has it is the handler's to check.
+/// A library profile's id or name as `frame.member` reads `library`: text that isn't blank, or a
+/// whole entry (then the key is empty, and the handler reads the entry). Whether the library has
+/// it is the handler's to check.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LibraryKey(pub String);
 
@@ -573,7 +574,12 @@ impl<'de> Deserialize<'de> for LibraryKey {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         match Value::deserialize(d)? {
             Value::String(k) if !k.trim().is_empty() => Ok(LibraryKey(k)),
-            _ => Err(D::Error::custom(whole("`library` must be a library profile's id or name"))),
+            // A whole entry (a personal one, one from a file): the handler adds it to the design's
+            // library, or uses the entry there that is the same.
+            Value::Object(o) if o.get("name").is_some_and(Value::is_string) && o.get("section").is_some_and(Value::is_object) => {
+                Ok(LibraryKey(String::new()))
+            }
+            _ => Err(D::Error::custom(whole("`library` must be a library profile's id or name, or a whole library profile"))),
         }
     }
 }
@@ -583,7 +589,10 @@ impl JsonSchema for LibraryKey {
         "LibraryKey".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
-        json_schema!({"description": "A library profile's id (`lp1`) or name.", "type": "string", "pattern": not_blank_pattern()})
+        json_schema!({"anyOf": [
+            {"description": "A library profile's id (`lp1`) or name.", "type": "string", "pattern": not_blank_pattern()},
+            {"description": "A whole library profile, as frame.personal.list or a library file holds it ({name, category?, section, points?, default_point?, material?, description?, stock_length?}; any id is replaced): added to the design's library, or the same entry there is used.", "type": "object", "required": ["name", "section"]}
+        ]})
     }
 }
 

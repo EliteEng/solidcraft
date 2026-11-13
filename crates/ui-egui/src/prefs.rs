@@ -1764,6 +1764,9 @@ preference_settings! {
     /// design's and the exported body's names (`export_name`). Empty: each export offers the name
     /// it did before (the design's, or the first body's for a mesh).
     export_name: String = String::new(), PAGE_DESIGN;
+    /// The personal frame profile library, offered by Frame Member in every design in this profile
+    /// (`frame.personal.*`, docs/frames.md). No page reset discards this user-authored library.
+    frame_profiles: crate::frame_personal::Library = crate::frame_personal::Library::default();
     /// Save as mesh: the last format (`stl` or `3mf`). Older versions also kept a "send to slicer"
     /// choice here (`save_mesh_send`, `save_mesh_slicer`); a settings file that still has them loads,
     /// and they are ignored.

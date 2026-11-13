@@ -204,6 +204,7 @@ mod extrude_face_snap;
 mod extrude_preview;
 mod file_load;
 mod file_picker;
+pub(crate) mod frame_personal;
 pub(crate) mod frame_watch;
 #[cfg(test)]
 mod history_off_thread_tests;
@@ -1913,6 +1914,8 @@ impl SolveApp {
         // Settings profiles live in the app: the engine only checked the parameters.
         let r = match r {
             Ok(v) if id.starts_with("settings.profile.") => settings_profiles::command(self, id, &v),
+            // So is the personal profile library.
+            Ok(v) if id.starts_with("frame.personal.") => frame_personal::command(self, id, &v),
             // The view navigator is the app's too.
             Ok(v) if id == "view.navigator" => view_gizmo::command(self, &v),
             r => r,
