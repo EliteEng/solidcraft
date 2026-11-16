@@ -1837,3 +1837,36 @@ fn bad_corners_are_refused_with_the_reason() {
     assert!(err.contains("junction") && err.contains("butt or none"), "{err}");
     assert!(bodies(&mut s).is_empty(), "nothing is made");
 }
+
+#[test]
+fn a_frame_on_the_front_plane_has_its_posts_facing_like_its_rails() {
+    // A 40 × 20 tube: its 40 mm side faces out of the sketch (along Y) on every member, the
+    // posts as well as the rails.
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XZ", "name": "Frame"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [600, 400]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let tube = json!({"kind": "rect_tube", "width": 40, "height": 20, "wall": 3});
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube.clone(), "corners": {"treatment": "none"}}))["feature"].clone();
+    let depths = |s: &mut Session| -> Vec<f64> {
+        let r = run(s, "inspect.measure", json!({}));
+        r["bodies"].as_array().unwrap().iter().map(|b| f(&b["bbox"]["max"][1]) - f(&b["bbox"]["min"][1])).collect()
+    };
+    let got = depths(&mut s);
+    assert_eq!(got.len(), 4);
+    assert!(got.iter().all(|d| (d - 40.0).abs() < 1e-6), "every member 40 deep: {got:?}");
+    // Reopened, it stays so (the upgrade for older designs doesn't touch it).
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    assert_eq!(depths(&mut reopened), got);
+    // An older design's posts (world X) keep their quarter turn, also through an edit.
+    let params = json!({"sketch": "Frame", "profile": tube.clone(), "corners": {"treatment": "none"}, "posts_world_x": true});
+    run(&mut s, "timeline.redefine", json!({"feature": fid.clone(), "command": "frame.member", "params": params}));
+    let old = depths(&mut s);
+    assert_eq!(old.iter().filter(|d| (*d - 20.0).abs() < 1e-6).count(), 2, "the posts 20 deep: {old:?}");
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": fid, "command": "frame.member", "params": {"sketch": "Frame", "profile": tube, "corners": {"treatment": "none"}, "body_name": "Rail"}}),
+    );
+    assert_eq!(depths(&mut s), old, "an edit keeps them");
+}

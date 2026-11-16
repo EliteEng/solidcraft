@@ -219,7 +219,11 @@ existed has none: its members keep their square ends.
   lengths). Edit Feature keeps it.
 - **Orientation**: the profile's y points up (world +Z) as far as the line allows and its x is
   square to the line and to y (x × y runs along the line, so on a line along +X the profile's x is
-  world +Y); a vertical member's x is world +X. `angle` (an angle expression) turns the profile
+  world +Y). A vertical member in a flat sketch has its x out of the sketch, as the horizontal
+  members there do, so the posts and rails of a frame drawn on the Front or Right plane face the
+  same way (pointing along +X, or +Y when the sketch's normal has no X part); in a 3D sketch a
+  vertical member's x is world +X. A design saved before this keeps world-X posts
+  (`posts_world_x: true`, which Edit Feature keeps). `angle` (an angle expression) turns the profile
   about the line, counter-clockwise looking back from the line's end; `mirror` mirrors it across
   its y axis first. A line leaning less than 10⁻⁶ rad from vertical counts as vertical, so
   rounding in a 3D sketch never turns a post a quarter turn.

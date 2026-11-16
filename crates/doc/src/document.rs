@@ -1490,6 +1490,11 @@ pub enum FeatureKind {
         /// is kept, so undoing a sketch edit brings it back, and skipped with a warning.
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         corner_overrides: std::collections::BTreeMap<String, crate::frame_corner::CornerOverride>,
+        /// Vertical members' profile x is world +X whatever plane the frame is drawn on, as in a
+        /// design saved before posts faced out of the sketch (`frame::member_axes_on`). It turned
+        /// the posts of a frame drawn on an upright plane a quarter turn against its rails.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        posts_world_x: bool,
     },
     /// Raise or sink profiles on a planar face, or wrap them on a selected cylindrical wall.
     Emboss {

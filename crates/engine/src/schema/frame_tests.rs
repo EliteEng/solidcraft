@@ -56,6 +56,7 @@ fn schemas_and_the_key_check_agree() {
             "names",
             "participants",
             "point",
+            "posts_world_x",
             "profile",
             "profile_sketch",
             "profiles",

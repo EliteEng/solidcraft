@@ -696,3 +696,24 @@ fn a_spec_names_a_standard_size_and_saves_its_dimensions() {
     assert!(!size_with_dimensions(&serde_json::json!({"size": "RSC 203x89", "kind": "channel"})));
     assert!(!size_with_dimensions(&serde_json::json!({"kind": "bar", "width": 1, "height": 1})));
 }
+
+#[test]
+fn posts_in_an_upright_sketch_face_out_of_it_like_its_rails() {
+    // The Front plane (XZ, normal −Y or +Y): a rail along X has x out of the sketch (±Y); a post
+    // along Z now has x along +Y too, not along X in the sketch.
+    for n in [Vec3::Y, -Vec3::Y] {
+        let (rail_x, _) = member_axes_on(Vec3::X, 0.0, Some(n)).unwrap();
+        let (post_x, post_y) = member_axes_on(Vec3::Z, 0.0, Some(n)).unwrap();
+        close(rail_x.dot(Vec3::Y).abs(), 1.0, "rail x out of the sketch");
+        close(post_x.dist(Vec3::Y), 0.0, "post x out of the sketch, towards +Y");
+        close(post_y.dot(Vec3::Y), 0.0, "post y in the sketch");
+    }
+    // The Right plane already faced its posts out of it (+X), and still does.
+    let (x, _) = member_axes_on(-Vec3::Z, 0.0, Some(-Vec3::X)).unwrap();
+    close(x.dist(Vec3::X), 0.0, "Right plane post");
+    // Lines that aren't vertical, a flat sketch's and no sketch at all are as before.
+    let d = Vec3::new(1.0, 2.0, 3.0);
+    assert_eq!(member_axes_on(d, 0.4, Some(Vec3::Y)), member_axes(d, 0.4));
+    assert_eq!(member_axes_on(Vec3::X, 0.0, Some(Vec3::Z)), member_axes(Vec3::X, 0.0));
+    assert_eq!(member_axes_on(Vec3::Z, 0.0, None), member_axes(Vec3::Z, 0.0));
+}

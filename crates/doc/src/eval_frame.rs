@@ -30,10 +30,10 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
     let FeatureKind::FrameMember { body_name, names, corners, corner_overrides, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
-    let Layout { segments, regions, description, at, turn, turns, centre } = layout(doc, vals, f, st)?;
+    let Layout { segments, regions, description, at, turn, turns, centre, normal } = layout(doc, vals, f, st)?;
     let mut placed = Vec::with_capacity(segments.len());
     for l in &segments {
-        let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(&l.id).copied())
+        let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(&l.id).copied(), normal)
             .ok_or_else(|| DocError::Invalid(format!("line `{}`: no plane square to it", l.id)))?;
         placed.push(placed_on(l, &plane, &regions));
     }
@@ -88,10 +88,13 @@ struct Layout {
     turn: f64,
     turns: BTreeMap<String, f64>,
     centre: Vec2,
+    /// A flat frame sketch's normal, which sets which way its posts face; none for a 3D sketch or
+    /// with `posts_world_x`.
+    normal: Option<Vec3>,
 }
 
 fn layout(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState) -> Result<Layout> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, .. } = &f.kind else {
+    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, posts_world_x, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
     let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch} (it must come earlier in the timeline)")))?;
@@ -108,18 +111,21 @@ fn layout(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &Mode
     };
     let turns = member_turns(doc, vals, FeatureId(f.id)).into_iter().map(|(line, (_, a))| (line, a)).collect();
     let centre = frame::anchor_point(&regions, frame::Anchor::Center);
-    Ok(Layout { segments, regions, description, at, turn, turns, centre })
+    // A flat sketch's normal sets which way its posts face; a 3D sketch has none.
+    let normal = (ps.sketch.wires.is_empty() && !*posts_world_x).then(|| mapped.plane.x.cross(mapped.plane.y));
+    Ok(Layout { segments, regions, description, at, turn, turns, centre, normal })
 }
 
 /// The plane a member's profile is laid in at `a`, square to the line on to `b`: profile point
 /// `at` on the line, the profile turned `turn` about it. A Rotate step's turn `own` turns it on
-/// about the profile point `centre`, which stays where it was.
-fn member_plane(a: Vec3, b: Vec3, turn: f64, at: Vec2, centre: Vec2, own: Option<f64>) -> Option<Plane> {
-    let (x, y) = frame::member_axes(b - a, turn)?;
+/// about the profile point `centre`, which stays where it was. `normal` is a flat frame sketch's
+/// ([`frame::member_axes_on`]).
+fn member_plane(a: Vec3, b: Vec3, turn: f64, at: Vec2, centre: Vec2, own: Option<f64>, normal: Option<Vec3>) -> Option<Plane> {
+    let (x, y) = frame::member_axes_on(b - a, turn, normal)?;
     let origin = a - x * at.x - y * at.y;
     let Some(t) = own else { return Plane::new(origin, x, y) };
     let pivot = origin + x * centre.x + y * centre.y;
-    let (x, y) = frame::member_axes(b - a, turn + t.rem_euclid(std::f64::consts::TAU))?;
+    let (x, y) = frame::member_axes_on(b - a, turn + t.rem_euclid(std::f64::consts::TAU), normal)?;
     Plane::new(pivot - x * centre.x - y * centre.y, x, y)
 }
 
@@ -139,9 +145,9 @@ pub(crate) fn member_section(
     st: &ModelState,
     line: &str,
 ) -> Result<(Plane, f64, Region2)> {
-    let Layout { segments, regions, at, turn, turns, centre, .. } = layout(doc, vals, f, st)?;
+    let Layout { segments, regions, at, turn, turns, centre, normal, .. } = layout(doc, vals, f, st)?;
     let l = segments.iter().find(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(line).copied())
+    let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(line).copied(), normal)
         .ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
     let region = regions.into_iter().next().ok_or_else(|| DocError::Invalid("the member profile has no area".into()))?;
     Ok((plane, l.a.dist(l.b), region))
@@ -258,9 +264,10 @@ pub(super) fn junctions_of(lines: &[MemberLine]) -> Vec<frame_corner::Junction> 
 /// The point member `line` of `f` turns about, halfway along it: the centre of the profile's
 /// bounding box, which a Rotate step's turn leaves where it is ([`member_plane`]).
 pub(crate) fn member_pivot(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState, line: &str) -> Result<Vec3> {
-    let Layout { segments, at, turn, centre, .. } = layout(doc, vals, f, st)?;
+    let Layout { segments, at, turn, centre, normal, .. } = layout(doc, vals, f, st)?;
     let l = segments.iter().find(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let plane = member_plane(l.a, l.b, turn, at, centre, None).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
+    let plane =
+        member_plane(l.a, l.b, turn, at, centre, None, normal).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
     Ok(plane.origin + plane.x * centre.x + plane.y * centre.y + (l.b - l.a) * 0.5)
 }
 

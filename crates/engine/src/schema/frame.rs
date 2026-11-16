@@ -768,6 +768,11 @@ pub struct FrameMemberKeys {
     /// `corners`. One whose junction is gone is kept and not used.
     #[serde(default)]
     pub corner_overrides: Option<CornerOverrides>,
+    /// Vertical members' profile x along world X whatever plane the frame is drawn on, as designs
+    /// saved before posts faced out of the sketch had it (Edit Feature keeps it). Default: false,
+    /// a vertical member in a flat sketch faces out of it as the horizontal ones do.
+    #[serde(default)]
+    pub posts_world_x: Option<bool>,
     /// The bodies taking part, which every feature records; each an existing body or `*`. Members
     /// are new bodies, whatever this lists.
     #[serde(default)]

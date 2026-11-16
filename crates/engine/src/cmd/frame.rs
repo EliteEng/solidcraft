@@ -55,7 +55,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(concat!(
         "sketch: the frame sketch (id or name; 2D or 3D); lines?: [curve ids] (one member each; default: every straight line drawn in the sketch: not construction, not projected or otherwise linked, not of no length); ",
         profile_doc!(),
-        " | profile_sketch: a sketch whose profile is the section, in its own x and y around its origin, with profiles?: picks as solid.extrude takes them (default: its material, nested loops alternating, so two circles make a tube) | library: a profile of the design's profile library, by id or name (frame.library.list; editing it changes the members); anchor?: origin|center|centroid|top_left|top|top_right|left|right|bottom_left|bottom|bottom_right (the profile point that sits on each line, default origin); point?: a placement point by name, used instead of locate and anchor (frame.profile.points lists a profile's: an angle's heel_inside, a channel's web_back…; default a library profile's default point, else locate, else anchor); locate?: [x,y] (the profile point that sits on each line, in mm from the profile's own origin: a bar's or an angle's bottom-left corner, a channel's web back at mid-height, the centre of other profiles; takes precedence over `anchor` and keeps the member attached at that point when the profile size changes); angle?: angle expr (the profile turned about the line; default 0: its y as near world up as the line allows, a vertical member's x along world X); mirror?: bool (the profile mirrored across its y axis); name?; body_name? (what the members are named after, then numbered: `Rail`, `Rail (2)`…; default the size's name, `RSC 203x89`, the profile's description, `Rect Tube 40x40x3`, or the profile sketch's name); names?: {line id: name} (names to keep, as Edit Feature keeps them). One body per line, from its start to its end; each member keeps its name when other lines are added or deleted. Returns the feature and the bodies it made"
+        " | profile_sketch: a sketch whose profile is the section, in its own x and y around its origin, with profiles?: picks as solid.extrude takes them (default: its material, nested loops alternating, so two circles make a tube) | library: a profile of the design's profile library, by id or name (frame.library.list; editing it changes the members); anchor?: origin|center|centroid|top_left|top|top_right|left|right|bottom_left|bottom|bottom_right (the profile point that sits on each line, default origin); point?: a placement point by name, used instead of locate and anchor (frame.profile.points lists a profile's: an angle's heel_inside, a channel's web_back…; default a library profile's default point, else locate, else anchor); locate?: [x,y] (the profile point that sits on each line, in mm from the profile's own origin: a bar's or an angle's bottom-left corner, a channel's web back at mid-height, the centre of other profiles; takes precedence over `anchor` and keeps the member attached at that point when the profile size changes); angle?: angle expr (the profile turned about the line; default 0: its y as near world up as the line allows, a vertical member's x out of a flat frame sketch as the horizontal members' is, or along world X in a 3D sketch or with posts_world_x); mirror?: bool (the profile mirrored across its y axis); name?; body_name? (what the members are named after, then numbered: `Rail`, `Rail (2)`…; default the size's name, `RSC 203x89`, the profile's description, `Rect Tube 40x40x3`, or the profile sketch's name); names?: {line id: name} (names to keep, as Edit Feature keeps them). One body per line, from its start to its end; each member keeps its name when other lines are added or deleted. Returns the feature and the bodies it made"
     )),
     CommandSpec::new("frame.junctions", "Frame Junctions", crate::checked!("frame.junctions", junctions))
         .icon("frame_member")
@@ -458,6 +458,10 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => false,
         Some(_) => bool_(p, "mirror").ok_or_else(|| bad(cmd, "`mirror` must be true or false"))?,
     };
+    let posts_world_x = match p.get("posts_world_x") {
+        None | Some(Value::Null) => false,
+        Some(_) => bool_(p, "posts_world_x").ok_or_else(|| bad(cmd, "`posts_world_x` must be true or false"))?,
+    };
     let kept: BTreeMap<String, String> = match p.get("names") {
         None | Some(Value::Null) => BTreeMap::new(),
         Some(Value::Object(m)) if m.len() <= frame::MAX_MEMBERS => m
@@ -485,6 +489,7 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
         names: BTreeMap::new(),
         corners,
         corner_overrides,
+        posts_world_x,
     };
     // Each member's name is pinned to its line as the feature is made, so deleting or adding a
     // line later leaves the other members' names alone.

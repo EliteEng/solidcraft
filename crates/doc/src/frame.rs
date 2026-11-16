@@ -878,12 +878,26 @@ pub fn mirrored(region: &Region2) -> Region2 {
 /// profile counter-clockwise about the line, seen looking back from its end. `None` for a
 /// direction of no length.
 pub fn member_axes(d: Vec3, angle: f64) -> Option<(Vec3, Vec3)> {
+    member_axes_on(d, angle, None)
+}
+
+/// [`member_axes`] for a member drawn in a flat sketch whose plane has normal `normal`: a vertical
+/// member's x points out of the sketch, as a horizontal member's in that sketch does, so posts and
+/// rails of a frame drawn on an upright plane face the same way. The normal is taken pointing
+/// along +X, or +Y when it has no X part. `None` (a 3D sketch, or a design saved before this):
+/// world +X, as [`member_axes`].
+pub fn member_axes_on(d: Vec3, angle: f64, normal: Option<Vec3>) -> Option<(Vec3, Vec3)> {
     let d = d.normalized()?;
+    let post_x = normal
+        .map(|n| n - d * n.dot(d))
+        .and_then(|n| n.normalized())
+        .map(|n| if n.x < -VERTICAL_TOLERANCE || (n.x.abs() <= VERTICAL_TOLERANCE && n.y < 0.0) { -n } else { n })
+        .unwrap_or(Vec3::X);
     let up = Vec3::Z - d * Vec3::Z.dot(d);
     // `up` is as long as the sine of the line's lean from vertical.
     let (x, y) = match up.normalized().filter(|_| up.len() > VERTICAL_TOLERANCE) {
         Some(y) => (y.cross(d), y),
-        None => (Vec3::X, d.cross(Vec3::X)),
+        None => (post_x, d.cross(post_x)),
     };
     let (c, s) = (angle.cos(), angle.sin());
     Some((x * c + y * s, y * c - x * s))

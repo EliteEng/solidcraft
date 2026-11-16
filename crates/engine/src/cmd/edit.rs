@@ -2438,14 +2438,17 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
         parameters.entry("names").or_insert_with(|| json!(names));
     }
     // Members keep their corners through an edit that doesn't give them (an older design keeps
-    // its square ends), and their junctions' own settings.
-    if let FeatureKind::FrameMember { corners, corner_overrides, .. } = &old.kind
+    // its square ends), their junctions' own settings, and an older design's world-X posts.
+    if let FeatureKind::FrameMember { corners, corner_overrides, posts_world_x, .. } = &old.kind
         && cid == "frame.member"
         && let Some(parameters) = params.as_object_mut()
     {
         parameters.entry("corners").or_insert_with(|| super::frame::corners_param(corners));
         if !corner_overrides.is_empty() {
             parameters.entry("corner_overrides").or_insert_with(|| json!(corner_overrides));
+        }
+        if *posts_world_x {
+            parameters.entry("posts_world_x").or_insert(json!(true));
         }
     }
     // A fold keeps the side that stays, decided when it was made, through an edit that names
