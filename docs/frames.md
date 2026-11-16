@@ -2,7 +2,7 @@
 
 Frames and weldments (#4003) are structural members (tube, angle, channel, beam, an aluminium
 extrusion of your own) laid along the lines of a frame sketch. This page covers what has landed:
-members, their profiles, the profile library and end caps. Corners, trims, gussets, welds and
+members, their profiles, the profile library, corners and end caps. Trims, gussets, welds and
 the cut list follow ([the design](design/weldments.md)).
 
 ## The workflow
@@ -26,7 +26,9 @@ the cut list follow ([the design](design/weldments.md)).
 ```
 
 Members are ordinary bodies: mirror, pattern, move, drill and combine them with the usual
-commands. Where members meet they overlap until corner treatments land.
+commands. Where members of one feature meet, their corners are mitred or butted (see Corners).
+Members of different features don't form corners with each other: put lines that meet in one
+feature.
 
 The **Weldments** ribbon tab gathers the frame commands: New Sketch, Frame Member, End Cap and
 Parameters. Like Sheet Metal it is always there, and it selects itself when a frame member is
@@ -48,6 +50,12 @@ the selected body (or the last body of the active component).
   section) to the library and switch to it. Save as names it (default: after the profile, with
   ` (2)`… if the library has that name already); Category files it, `/` between levels
   (`Steel/RHS`; default: the profile's kind, or Custom for a sketch section).
+- **Corners**: **Mitre** (the default), **Butt** or **None** (square ends that overlap, as members
+  were before corners), with the **Weld gap** left at every junction and **Flush butt cuts**
+  (butting members cut on the face they meet instead of square). With Butt, **Runs through**
+  picks which pieces run through at every corner: the **Longer** ones (the default) or the
+  **Shorter** ones. See Corners. The preference
+  **New frame members have square ends** (Preferences › Tools) starts it at None.
 - **Point**, **Angle** and **Mirror** place the section on each line, as below. Point lists the
   profile's placement points; with a library profile the first choice is its default point. **Name** names
   the members (default: after the profile).
@@ -143,6 +151,50 @@ A mirrored profile's bounding-box points are those of the mirrored outline (its 
 at the top left); the points its kind generates or its entry names move with the material (an
 angle's `heel` stays the heel).
 
+## Corners
+
+Where a feature's members meet is a **junction**:
+
+| Kind | What meets | What it gets |
+|---|---|---|
+| L | two ends at a point, at an angle | the feature's treatment: mitre, butt or none |
+| I | two ends at a point, in line | the weld gap between them (each end cut back half of it) |
+| T | ends landing on another member between its ends | butt: the other member runs through |
+| Multi | three or more ends at a point | butt: ranked as at an L (longer or shorter first), each next one butts against those before it |
+
+Ends meet where they share a sketch point or lie within 10⁻⁶ of the frame's size of each other;
+lines that cross between their ends are no junction.
+
+- **Mitre**: both members are cut on the plane that mirrors one onto the other, also for lines in
+  3D. A gap moves each cut half the gap back along the plane's normal.
+- **Butt**: one member runs through: at an L it runs on to the other's outside face, covering the
+  corner. The other stops at its near face, less the gap: cut square to itself where it first
+  touches the face (the default), or on the face itself (`butt_cut: flush`). Which member runs
+  through follows `butt_through`: the longer one (the default) or the shorter one. Equal lengths
+  go by direction (the one nearer the X axis, then Y, counts as longer), so every corner of a
+  rectangle or a square goes the same way and the other choice swaps them all. A junction's
+  `through` names the member that runs through there, whatever the rule says.
+- Cuts are planes worked out from the lines and the sections' exact extents (lines, arcs and cubic
+  curves; a drawn section's other curves by their control polygon). There is no smallest angle: a
+  corner is refused only when its cut can't be made within its member (it reaches past the
+  member's other end, or the members are too near parallel), and the message names the junction
+  and suggests butt or none.
+
+Each junction has an id: the sketch point the ends share (`p12`; for a 3D sketch line,
+`<line>.start` or `<line>.end`), or for a T the end's point and the line it lands on (`p12@l7`).
+`frame.junctions` lists a feature's junctions with what each gets; `corner_overrides` on
+`frame.member` changes one:
+
+```json
+{"command": "frame.member", "params": {"sketch": "Frame", "library": "40x40x3 SHS", "corners": {"treatment": "mitre", "gap": "weld_gap"},
+  "corner_overrides": {"p3": {"treatment": "butt", "through": "l2"}, "p5@l1": {"treatment": "none"}}}}
+```
+
+An override whose junction no longer exists (after a sketch edit) is kept, so undoing the edit
+brings it back, and the feature warns that it isn't used. An edit (`timeline.redefine`) that
+doesn't give `corners` or `corner_overrides` keeps the feature's. A feature saved before corners
+existed has none: its members keep their square ends.
+
 ## frame.member
 
 - `sketch`: the frame sketch. `lines`: the curve ids to lay members on (2D lines or 3D sketch
@@ -177,6 +229,9 @@ angle's `heel` stays the heel).
   feature, leaves the other members' names alone; `body.rename` renames a member on its line.
   `names` (`{line id: name}`) gives names to keep, as Edit Feature (`timeline.redefine`) passes
   them unless the edit changes `body_name`.
+- `corners`: `{treatment?: mitre|butt|none, gap?: length, butt_cut?: square|flush, butt_through?:
+  longer|shorter}` (default: mitre, no gap, square, longer); `corner_overrides`: `{junction id: {treatment?, through?: line id, gap?,
+  butt_cut?}}` (see Corners).
 
 Every built-in profile is SolidCraft's own parametric definition, built in code
 (`solidcraft_doc::frame`). Standard steel sizes (below) fill in a profile's dimensions from a
@@ -301,6 +356,9 @@ given larger than the room for it.
 
 ## Commands
 
+- `frame.junctions` `{feature}`: a frame member feature's junctions: `id`, `kind` (L, I, T,
+  Multi), `at`, the member `ends` that meet (`[line id, start|end]`), `span` (the line a T lands
+  on), and what it gets (`treatment`, `gap`, `butt_cut`, `through`, `overridden`).
 - `frame.profile.list` `{family?}`: every kind, its dimensions and a working example; and the
   standard sizes by name, family by family.
 - `frame.profile.properties` `{profile, density?}`: the section, worked out exactly from its lines

@@ -13,6 +13,7 @@ use solidcraft_sketch::CurveKind;
 use super::{ModelBody, ModelState, SolvedSketch, new_name, path_in_frame, select_profiles, sketch_in_feature_frame, val};
 use crate::expr::{Expr, Kind, Value};
 use crate::frame::{self, MAX_MEMBERS, MemberProfile};
+use crate::frame_corner::{self, CornerDefaults, CornerOverride, MemberCuts, MemberLine};
 use crate::frame_library;
 use crate::{DocError, Document, Feature, FeatureId, FeatureKind, ProfileSel, Result};
 
@@ -25,20 +26,37 @@ const STRAIGHT_TOL: f64 = 1e-3;
 
 /// Evaluate a `FrameMember` feature: one new body per line, each named
 /// ([`member_names`], or by position for a copy whose `body_names` were set).
-pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &mut ModelState) -> Result<()> {
-    let FeatureKind::FrameMember { body_name, names, .. } = &f.kind else {
+pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &mut ModelState, warning: &mut Option<String>) -> Result<()> {
+    let FeatureKind::FrameMember { body_name, names, corners, corner_overrides, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
     let Layout { segments, regions, description, at, turn, turns, centre } = layout(doc, vals, f, st)?;
+    let mut placed = Vec::with_capacity(segments.len());
+    for l in &segments {
+        let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(&l.id).copied())
+            .ok_or_else(|| DocError::Invalid(format!("line `{}`: no plane square to it", l.id)))?;
+        placed.push(placed_on(l, &plane, &regions));
+    }
+    let cuts = corner_cuts(vals, &segments, &placed, corners, corner_overrides, warning)?;
     let mut made = Vec::with_capacity(segments.len());
-    for (id, a, b) in &segments {
-        let plane = member_plane(*a, *b, turn, at, centre, turns.get(id).copied())
+    for ((l, p), c) in segments.iter().zip(&placed).zip(cuts) {
+        let id = &l.id;
+        let plane = Plane::new(l.a - p.x * p.at.x - p.y * p.at.y, p.x, p.y)
             .ok_or_else(|| DocError::Invalid(format!("line `{id}`: no plane square to it")))?;
-        let mut bodies = kernel::extrude(&plane, &regions, 0.0, a.dist(*b))?;
-        let body = match (bodies.pop(), bodies.is_empty()) {
+        let mut bodies = kernel::extrude(&plane, &regions, -c.ext[0], l.a.dist(l.b) + c.ext[1])?;
+        let mut body = match (bodies.pop(), bodies.is_empty()) {
             (Some(body), true) => body,
             _ => return Err(DocError::Invalid(format!("the member on line `{id}` is not one solid"))),
         };
+        for (_, junction, cut) in &c.cuts {
+            let plane = Plane::from_normal(cut.origin, cut.normal)
+                .ok_or_else(|| DocError::Invalid(format!("junction `{junction}`: the cut on line `{id}` has no direction")))?;
+            body = match kernel::half_space(&body, &plane, true)?.0 {
+                Some(b) if b.lumps().map_or(1, |l| l.len()) <= 1 => b,
+                Some(_) => return Err(DocError::Invalid(format!("junction `{junction}` cuts the member on line `{id}` in two (try butt or none)"))),
+                None => return Err(DocError::Invalid(format!("junction `{junction}` cuts away the whole member on line `{id}` (try butt or none)"))),
+            };
+        }
         made.push(crate::lineage::numbered_tool(body));
     }
     if !f.body_names.is_empty() {
@@ -51,7 +69,7 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
         return Ok(());
     }
     let base = body_name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map_or(description, str::to_string);
-    let ids: Vec<String> = segments.into_iter().map(|(id, _, _)| id).collect();
+    let ids: Vec<String> = segments.into_iter().map(|l| l.id).collect();
     for (name, t) in member_names(st, &ids, names, &base).into_iter().zip(made) {
         st.bodies.push(ModelBody::traced_new(name, t, f.id));
     }
@@ -63,7 +81,7 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
 /// (radians) from the Rotate steps after the feature ([`member_turns`]: a step whose angle fails
 /// is passed over) and the profile point those turn about (the centre of its bounding box).
 struct Layout {
-    segments: Vec<(String, Vec3, Vec3)>,
+    segments: Vec<MemberLine>,
     regions: Vec<Region2>,
     description: String,
     at: Vec2,
@@ -105,6 +123,13 @@ fn member_plane(a: Vec3, b: Vec3, turn: f64, at: Vec2, centre: Vec2, own: Option
     Plane::new(pivot - x * centre.x - y * centre.y, x, y)
 }
 
+/// Member line `l` laid in `plane` (from [`member_plane`]) as the corners take it: the plane's axes,
+/// and the profile point on the line (where the line's start is in the plane), exactly.
+fn placed_on<'a>(l: &MemberLine, plane: &Plane, regions: &'a [Region2]) -> frame_corner::Placed<'a> {
+    let d = l.a - plane.origin;
+    frame_corner::Placed { a: l.a, b: l.b, x: plane.x, y: plane.y, at: Vec2::new(d.dot(plane.x), d.dot(plane.y)), regions }
+}
+
 /// The member of feature `f` on line `line`, as its body was made: the plane square to the line
 /// at its start (x × y along the line), its length, and its profile in that plane.
 pub(crate) fn member_section(
@@ -115,20 +140,128 @@ pub(crate) fn member_section(
     line: &str,
 ) -> Result<(Plane, f64, Region2)> {
     let Layout { segments, regions, at, turn, turns, centre, .. } = layout(doc, vals, f, st)?;
-    let (_, a, b) = segments.iter().find(|(id, _, _)| id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let plane = member_plane(*a, *b, turn, at, centre, turns.get(line).copied())
+    let l = segments.iter().find(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
+    let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(line).copied())
         .ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
     let region = regions.into_iter().next().ok_or_else(|| DocError::Invalid("the member profile has no area".into()))?;
-    Ok((plane, a.dist(*b), region))
+    Ok((plane, l.a.dist(l.b), region))
+}
+
+/// Each member's corner cuts: none when the feature has no corner settings.
+fn corner_cuts(
+    vals: &BTreeMap<String, Value>,
+    lines: &[MemberLine],
+    placed: &[frame_corner::Placed],
+    corners: &CornerDefaults,
+    overrides: &BTreeMap<String, CornerOverride>,
+    warning: &mut Option<String>,
+) -> Result<Vec<MemberCuts>> {
+    if corners.is_none() && overrides.is_empty() {
+        return Ok(vec![MemberCuts::default(); lines.len()]);
+    }
+    let gap = |label: &str, e: &Option<crate::Expr>| -> Result<Option<f64>> {
+        let Some(e) = e else { return Ok(None) };
+        let g = val(vals, e, Kind::Length)?;
+        if !(g >= 0.0) || !g.is_finite() {
+            return Err(DocError::Invalid(format!("{label} must not be negative")));
+        }
+        Ok(Some(g))
+    };
+    let gap_within = gap("the weld gap", &corners.gap_within)?.unwrap_or(0.0);
+    let found = junctions_of(lines);
+    let mut over = BTreeMap::new();
+    let mut gone = Vec::new();
+    for (id, o) in overrides {
+        if found.iter().any(|j| j.id == *id) {
+            over.insert(id.as_str(), (o, gap(&format!("the gap at junction `{id}`"), &o.gap)?));
+        } else {
+            gone.push(id.as_str());
+        }
+    }
+    if !gone.is_empty() {
+        let shown: Vec<String> = gone.iter().take(5).map(|g| format!("`{g}`")).collect();
+        let more = if gone.len() > 5 { format!(" and {} more", gone.len() - 5) } else { String::new() };
+        super::append_warning(
+            warning,
+            format!("the corner settings of junction {}{more} are kept but not used: no members meet there now", shown.join(", ")),
+        );
+    }
+    frame_corner::member_cuts(placed, &found, |j| {
+        let o = over.get(j.id.as_str()).map(|(o, g)| (*o, *g));
+        frame_corner::settings(j, corners, gap_within, o, lines)
+    })
+}
+
+/// One junction of a frame member feature as it builds: where, which member ends meet there
+/// (by line id), and what it gets.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct JunctionReport {
+    pub id: String,
+    pub kind: frame_corner::JunctionKind,
+    pub at: [f64; 3],
+    pub ends: Vec<(String, frame_corner::End)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<String>,
+    pub treatment: frame_corner::Treatment,
+    pub gap: f64,
+    pub butt_cut: frame_corner::ButtCut,
+    /// The line that runs through at a butt where two or more ends meet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
+    /// It has settings of its own (`corner_overrides`).
+    pub overridden: bool,
+}
+
+/// The junctions of frame member feature `f`, in its component's coordinates, with what each gets.
+pub fn feature_junctions(doc: &Document, st: &ModelState, f: &Feature) -> Result<Vec<JunctionReport>> {
+    let FeatureKind::FrameMember { path_sketch, lines, corners, corner_overrides, .. } = &f.kind else {
+        return Err(DocError::Invalid("not a frame member feature".into()));
+    };
+    let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch}")))?;
+    let mapped =
+        if ps.sketch.wires.is_empty() { Cow::Owned(sketch_in_feature_frame(doc, ps, f.component)?) } else { path_in_frame(doc, ps, f.component)? };
+    let segments = member_lines(mapped.as_ref(), lines)?;
+    let (vals, _) = doc.param_values();
+    let gap = |e: &Option<crate::Expr>| e.as_ref().and_then(|e| val(&vals, e, Kind::Length).ok()).filter(|g| *g >= 0.0);
+    let gap_within = gap(&corners.gap_within).unwrap_or(0.0);
+    let line_id = |i: usize| segments.get(i).map(|l| l.id.clone()).unwrap_or_default();
+    Ok(junctions_of(&segments)
+        .into_iter()
+        .map(|j| {
+            let over = corner_overrides.get(&j.id);
+            let set = frame_corner::settings(&j, corners, gap_within, over.map(|o| (o, gap(&o.gap))), &segments);
+            JunctionReport {
+                id: j.id.clone(),
+                kind: j.kind,
+                at: [j.at.x, j.at.y, j.at.z],
+                ends: j.ends.iter().map(|(i, e)| (line_id(*i), *e)).collect(),
+                span: j.span.map(line_id),
+                treatment: set.treatment,
+                gap: set.gap,
+                butt_cut: set.butt_cut,
+                through: (set.treatment == frame_corner::Treatment::Butt
+                    && matches!(j.kind, frame_corner::JunctionKind::L | frame_corner::JunctionKind::Multi))
+                .then(|| set.rank.first().map(|i| line_id(*i)))
+                .flatten(),
+                overridden: over.is_some(),
+            }
+        })
+        .collect())
+}
+
+/// The junctions of a feature's member lines, matching ends within a tolerance of the frame's size.
+pub(super) fn junctions_of(lines: &[MemberLine]) -> Vec<frame_corner::Junction> {
+    let size = lines.iter().flat_map(|l| [l.a, l.b]).map(|p| p.x.abs().max(p.y.abs()).max(p.z.abs())).fold(1.0_f64, f64::max);
+    frame_corner::junctions(lines, frame_corner::JOIN_TOL * size)
 }
 
 /// The point member `line` of `f` turns about, halfway along it: the centre of the profile's
 /// bounding box, which a Rotate step's turn leaves where it is ([`member_plane`]).
 pub(crate) fn member_pivot(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState, line: &str) -> Result<Vec3> {
     let Layout { segments, at, turn, centre, .. } = layout(doc, vals, f, st)?;
-    let (_, a, b) = segments.iter().find(|(id, _, _)| id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let plane = member_plane(*a, *b, turn, at, centre, None).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
-    Ok(plane.origin + plane.x * centre.x + plane.y * centre.y + (*b - *a) * 0.5)
+    let l = segments.iter().find(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
+    let plane = member_plane(l.a, l.b, turn, at, centre, None).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
+    Ok(plane.origin + plane.x * centre.x + plane.y * centre.y + (l.b - l.a) * 0.5)
 }
 
 /// The body name of the member on each of `lines`: its own name from `pinned` (by line id) when no
@@ -216,7 +349,7 @@ pub fn member_line_ids(st: &ModelState, kind: &FeatureKind) -> Result<Vec<String
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
     let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch}")))?;
-    Ok(member_lines(ps, lines)?.into_iter().map(|(id, _, _)| id).collect())
+    Ok(member_lines(ps, lines)?.into_iter().map(|l| l.id).collect())
 }
 
 /// The section of profile sketch `sketch` as a member would take it (its material, or the
@@ -236,7 +369,7 @@ pub fn sketch_point(st: &ModelState, sketch: crate::SketchId, id: &str) -> Optio
 /// The member lines of the frame sketch, each as (curve id, start, end) in its frame: the lines
 /// asked for, or every straight line drawn in it (not construction, not projected or otherwise
 /// linked, and with a length).
-fn member_lines(ss: &SolvedSketch, ids: &[String]) -> Result<Vec<(String, Vec3, Vec3)>> {
+pub(super) fn member_lines(ss: &SolvedSketch, ids: &[String]) -> Result<Vec<MemberLine>> {
     let sk = &ss.sketch;
     let mut out = Vec::new();
     if ids.is_empty() {
@@ -245,17 +378,17 @@ fn member_lines(ss: &SolvedSketch, ids: &[String]) -> Result<Vec<(String, Vec3, 
                 && !c.centerline
                 && c.link.is_none()
                 && matches!(c.kind, CurveKind::Line { .. })
-                && let Some((a, b)) = planar_line(ss, ci)
+                && let Some((a, b, ends)) = planar_line(ss, ci)
                 && a.dist(b) > MIN_LENGTH
             {
-                out.push((c.id.clone(), a, b));
+                out.push(MemberLine { id: c.id.clone(), a, b, ends });
             }
         }
         for w in sk.wires.iter().filter(|w| w.link.is_none()) {
             if let Some((a, b)) = straight(&w.pts)
                 && a.dist(b) > MIN_LENGTH
             {
-                out.push((w.id.clone(), a, b));
+                out.push(MemberLine { id: w.id.clone(), a, b, ends: wire_ends(&w.id) });
             }
         }
         if out.is_empty() {
@@ -275,25 +408,30 @@ fn member_lines(ss: &SolvedSketch, ids: &[String]) -> Result<Vec<(String, Vec3, 
             return Err(DocError::Invalid(format!("line `{id}` is listed twice")));
         }
         let line = if let Some(wi) = sk.wire_index(id) {
-            sk.wires.get(wi).and_then(|w| straight(&w.pts))
+            sk.wires.get(wi).and_then(|w| straight(&w.pts)).map(|(a, b)| (a, b, wire_ends(id)))
         } else {
             let ci = sk.curve_index(id).ok_or_else(|| DocError::Unknown(format!("line `{id}` in {}", ss.name)))?;
             planar_line(ss, ci)
         };
-        let (a, b) = line.ok_or_else(|| DocError::Invalid(format!("`{id}` is not a straight line (members run along lines)")))?;
+        let (a, b, ends) = line.ok_or_else(|| DocError::Invalid(format!("`{id}` is not a straight line (members run along lines)")))?;
         if !(a.dist(b) > MIN_LENGTH) {
             return Err(DocError::Invalid(format!("line `{id}` has no length")));
         }
-        out.push((id.clone(), a, b));
+        out.push(MemberLine { id: id.clone(), a, b, ends });
     }
     Ok(out)
 }
 
-/// A sketch line's ends in the sketch's frame.
-fn planar_line(ss: &SolvedSketch, ci: usize) -> Option<(Vec3, Vec3)> {
+/// A sketch line's ends in the sketch's frame, and their point ids.
+fn planar_line(ss: &SolvedSketch, ci: usize) -> Option<(Vec3, Vec3, [String; 2])> {
     let CurveKind::Line { a, b } = ss.sketch.curves.get(ci)?.kind else { return None };
-    let (pa, pb) = (ss.sketch.points.get(a)?.pos, ss.sketch.points.get(b)?.pos);
-    Some((ss.plane.to_world(pa), ss.plane.to_world(pb)))
+    let (pa, pb) = (ss.sketch.points.get(a)?, ss.sketch.points.get(b)?);
+    Some((ss.plane.to_world(pa.pos), ss.plane.to_world(pb.pos), [pa.id.clone(), pb.id.clone()]))
+}
+
+/// A 3D sketch line's end ids: it has no end points of its own.
+fn wire_ends(id: &str) -> [String; 2] {
+    [format!("{id}.start"), format!("{id}.end")]
 }
 
 /// The ends of a 3D polyline that runs straight from its first point to its last: every point

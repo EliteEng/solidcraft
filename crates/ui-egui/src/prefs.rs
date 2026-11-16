@@ -1690,6 +1690,9 @@ preference_settings! {
     /// the number read in the design's unit ("2 in" = 50.8 mm) never fits the part (#12418). On: it
     /// opens at the number 2 read in the design's unit, as before.
     fillet_legacy_radius: bool = false, PAGE_TOOLS => check_id_help("prefs.fillet_legacy_radius", "prefs.fillet_legacy_radius.help");
+    /// New frame members start with square ends that overlap at corners, as members were before
+    /// corner treatments: Frame Member's Corners row starts at None instead of Mitre.
+    frame_square_ends: bool = false, PAGE_TOOLS => check_id_help("prefs.frame_square_ends", "prefs.frame_square_ends.help");
     /// Placing a Single hole snaps to the middle of the face and the centres of its round edges
     /// (`hole_place`). Off by default: a hole goes where it is clicked.
     hole_snaps: bool = false, PAGE_TOOLS => check("Snap to face and edge centres");

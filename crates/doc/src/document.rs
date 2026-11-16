@@ -1482,6 +1482,14 @@ pub enum FeatureKind {
         /// come and go (`frame::member_names`).
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         names: std::collections::BTreeMap<String, String>,
+        /// What is done where members meet (`frame_corner`). None (a design from before corners):
+        /// square ends, members overlapping at corners.
+        #[serde(default, skip_serializing_if = "crate::frame_corner::CornerDefaults::is_none")]
+        corners: crate::frame_corner::CornerDefaults,
+        /// Junctions' own settings, by junction id (`p12`, `p12@l7`). One whose junction is gone
+        /// is kept, so undoing a sketch edit brings it back, and skipped with a warning.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        corner_overrides: std::collections::BTreeMap<String, crate::frame_corner::CornerOverride>,
     },
     /// Raise or sink profiles on a planar face, or wrap them on a selected cylindrical wall.
     Emboss {

@@ -78,6 +78,9 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             setting::remember_dialog_values(app, ui);
             setting::fillet_legacy_radius(app, ui);
         });
+        ui_kit::settings_section(ui, "frames", app.tr("prefs.frames"), |ui| {
+            setting::frame_square_ends(app, ui);
+        });
         ui_kit::settings_section(ui, "joint_move", app.tr("joint_move.settings"), |ui| {
             tool_group(ui, "", ui_kit::paint_assembly_move, |ui| {
                 ui.horizontal_wrapped(|ui| {

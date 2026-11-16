@@ -239,7 +239,7 @@ Junctions are classified:
 | L | two ends at a node, not collinear | the group default (within or between groups) |
 | I | two ends at a node, collinear | butt with gap (two pieces); mitre is not offered |
 | T | one or more ends on another member's span | butt, the spanning member runs through |
-| Multi | three or more ends at a node | butt: the first-listed member runs through (see 3.4) |
+| Multi | three or more ends at a node | butt: the longer (or shorter) member runs through (see 3.4) |
 
 Lines that cross mid-span (an X) are not junctions. Both members stay whole, and the feature
 reports a warning that they overlap.
@@ -316,7 +316,9 @@ Gaps are length expressions, so `weld_gap` can be a parameter.
 
 ### Junctions where three or more members meet
 
-At a multi junction, members are ranked by group order, then by line order within the group. An
+At a multi junction, members are ranked by group order, then within the group by the feature's
+`butt_through` rule (longer first by default, or shorter first; equal lengths by direction, the
+one nearer X then Y first), the same rule that picks the through member at an L. An
 override's `through` picks the top-ranked member instead. That member runs through. The next one
 butts or copes against it. Each one after butts or copes against everything ranked above it at
 that node. A mitre between the top two with the rest butting against both is a later option
@@ -332,11 +334,12 @@ Trim/Extend, gussets and welds read these records instead of measuring geometry 
 
 - New design keys: `frame_profiles` (design library). In the `FrameMember` feature: `groups`,
   `corners`, `corner_overrides`.
-- One file per PR in `crates/doc/src/format/pending/`. The PR that adds groups includes a `step`
-  that rewrites an old `FrameMember`: its `lines`, `profile`, `anchor`, `angle`, `mirror` and
-  `body_name` become one group `g1`, with `corners.within_group` and `corners.between_groups` set
-  to `none`. An old design therefore rebuilds exactly as before, because corner treatments
-  change existing UI defaults (AGENTS.md). New features get the mitre and butt defaults.
+- One file per PR in `crates/doc/src/format/pending/`. Corners need no `step`: a feature without
+  `corners` reads as no treatment (`CornerDefaults::default()`), so an old design rebuilds exactly
+  as before, while new features get mitre from `frame.member` (and the dialog, unless the
+  `frame_square_ends` preference is on), since corner treatments change existing UI defaults
+  (AGENTS.md). Groups keep the feature's own fields as its first group and add `groups` for the
+  rest, so they need no `step` either.
 - A design saved with groups, opened by the last release: that release warns about the newer
   format and keeps what it cannot read, as with any pending change.
 - The personal library is a preference, not part of the design format.
@@ -461,10 +464,17 @@ adds its one pending format file.
    store, `frame.library.import`/`export`, `frame.personal.list`/`add`/`remove`/`export`, and copy
    into the design on first use (`frame.member` takes a whole entry as `library`). Frame Member's
    Type, Group and Size rows offer personal profiles beside the design's.
-3. **Groups and junctions.** `groups`, `CornerDefaults`, the junction graph and its ids, mitre and
-   butt (square and flush) with gaps, and the old-design `step`. Tests: a rectangle mitres into
-   four members with exact 45° faces and the given gap; a T butts; a 3D corner mitres; old designs
-   rebuild unchanged.
+3. **Junctions and corners** (built on branch `frame-profile-library`, without groups).
+   `CornerDefaults` (`within_group`, `gap_within`, `butt_cut`, `butt_through`) and `corner_overrides` on the
+   feature, the junction graph and its ids, mitre and butt (square and flush) with gaps,
+   `frame.junctions`, and the Frame Member window's Corners, Weld gap, Flush and Runs through rows (with the
+   preference `frame_square_ends` keeping square ends for new members). Old designs need no `step`:
+   a feature without `corners` reads as no treatment and rebuilds unchanged. Tests: a rectangle
+   mitres into four members with exact 45° faces and the given gap; butts with the through member
+   covering the corner; a T butts; a 3D corner mitres; an override survives edits and reopening;
+   old designs rebuild unchanged.
+3b. **Groups.** `groups` with their own profile and placement, `between_groups`, `gap_between`
+   and `through`, and junctions between groups.
 4. **Dialog.** Library pickers, placement point dots, groups list, junction markers and the
    corner panel (`corner_overrides`). Screenshots in the PR, as AGENTS.md requires.
 5. **Cope**, and multi-member junction ranking.

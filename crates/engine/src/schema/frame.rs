@@ -29,7 +29,7 @@ use solidcraft_doc::frame::{self, Anchor, MAX_MEMBERS, Profile, ProfileSpec};
 use super::check::{keyed, located, whole};
 use super::motion::require;
 use super::sketch_ends::SketchTarget;
-use super::types::{AngleExpr, Point2, ProfilesParam, SketchRef, StringList, not_blank_pattern, present};
+use super::types::{AngleExpr, LengthExpr, Point2, ProfilesParam, SketchRef, StringList, not_blank_pattern, present};
 use crate::params;
 
 /// The words `Anchor` is spelled with, as the handlers' message lists them.
@@ -759,10 +759,192 @@ pub struct FrameMemberKeys {
     /// `body_name`.
     #[serde(default)]
     pub names: Option<MemberNames>,
+    /// What is done where members meet. Default: two ends meeting at an angle are mitred; an end
+    /// landing on another member, three or more ends at one point and two ends in line butt; no gap.
+    #[serde(default)]
+    pub corners: Option<CornersParam>,
+    /// Junctions' own settings, by junction id (`frame.junctions` lists them: `p12` where ends
+    /// meet at sketch point `p12`, `p12@l7` where an end lands on line `l7`), each in place of
+    /// `corners`. One whose junction is gone is kept and not used.
+    #[serde(default)]
+    pub corner_overrides: Option<CornerOverrides>,
     /// The bodies taking part, which every feature records; each an existing body or `*`. Members
     /// are new bodies, whatever this lists.
     #[serde(default)]
     pub participants: Option<Participants>,
+}
+
+/// What is done where frame members meet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TreatmentParam {
+    /// Square ends at the line ends, overlapping at corners.
+    None,
+    /// Both cut on the plane between them (two ends at an angle; elsewhere a butt).
+    Mitre,
+    /// One runs through, the other stops at its face.
+    Butt,
+}
+
+impl From<TreatmentParam> for solidcraft_doc::frame_corner::Treatment {
+    fn from(t: TreatmentParam) -> Self {
+        match t {
+            TreatmentParam::None => Self::None,
+            TreatmentParam::Mitre => Self::Mitre,
+            TreatmentParam::Butt => Self::Butt,
+        }
+    }
+}
+
+/// How a butting member is cut where it meets the other at an angle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ButtCutParam {
+    /// Square to the butting member, stopping where it first touches the other's face.
+    Square,
+    /// On the other member's face, at an angle.
+    Flush,
+}
+
+impl From<ButtCutParam> for solidcraft_doc::frame_corner::ButtCut {
+    fn from(c: ButtCutParam) -> Self {
+        match c {
+            ButtCutParam::Square => Self::Square,
+            ButtCutParam::Flush => Self::Flush,
+        }
+    }
+}
+
+/// Which member runs through at a butt where no override names one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ButtThroughParam {
+    /// The longer member runs through; the shorter stops at its face.
+    Longer,
+    /// The shorter member runs through; the longer stops at its face.
+    Shorter,
+}
+
+impl From<ButtThroughParam> for solidcraft_doc::frame_corner::ButtThrough {
+    fn from(c: ButtThroughParam) -> Self {
+        match c {
+            ButtThroughParam::Longer => Self::Longer,
+            ButtThroughParam::Shorter => Self::Shorter,
+        }
+    }
+}
+
+/// `corners`: the corner settings every junction of the feature gets.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CornersParam {
+    /// Where two ends meet at an angle: `mitre` (default), `butt` or `none`. With `none`, no
+    /// junction is treated: square ends that overlap, as members were before corners.
+    #[serde(default)]
+    pub treatment: Option<TreatmentParam>,
+    /// The weld gap left at every junction, a length. Default: 0.
+    #[serde(default)]
+    pub gap: Option<LengthExpr>,
+    /// How butting members are cut: `square` (default) or `flush`.
+    #[serde(default)]
+    pub butt_cut: Option<ButtCutParam>,
+    /// Which member runs through at a butt: `longer` (default) or `shorter`. Equal lengths go by
+    /// direction (the one nearer the X axis, then Y, counts as longer), so every corner of a
+    /// rectangle or a square goes the same way and the other choice swaps them all.
+    #[serde(default)]
+    pub butt_through: Option<ButtThroughParam>,
+}
+
+/// One junction's settings in `corner_overrides`, each in place of the feature's.
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CornerOverrideParam {
+    #[serde(default)]
+    pub treatment: Option<TreatmentParam>,
+    /// The line id of the member that runs through (a butt), whatever `corners.butt_through` says.
+    #[serde(default)]
+    pub through: Option<LineId>,
+    /// The weld gap here, a length.
+    #[serde(default)]
+    pub gap: Option<LengthExpr>,
+    #[serde(default)]
+    pub butt_cut: Option<ButtCutParam>,
+}
+
+/// A line id: not blank, at most 128 characters.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct LineId(pub String);
+
+impl JsonSchema for LineId {
+    fn schema_name() -> Cow<'static, str> {
+        "LineId".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({"description": "A line's curve id.", "type": "string", "minLength": 1, "maxLength": 128, "pattern": not_blank_pattern()})
+    }
+}
+
+/// `corner_overrides`: up to [`solidcraft_doc::frame_corner::MAX_OVERRIDES`] junction ids, each
+/// with its settings.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CornerOverrides(pub BTreeMap<String, CornerOverrideParam>);
+
+impl JsonSchema for CornerOverrides {
+    fn schema_name() -> Cow<'static, str> {
+        "CornerOverrides".into()
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let each = generator.subschema_for::<CornerOverrideParam>();
+        json_schema!({
+            "description": "Junction ids (`p12`, `p12@l7`), each with its own corner settings.",
+            "type": "object",
+            "maxProperties": solidcraft_doc::frame_corner::MAX_OVERRIDES,
+            "additionalProperties": each,
+        })
+    }
+}
+
+/// `frame.junctions`'s parameters.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JunctionsParams {
+    /// The frame member feature, by id or name.
+    pub feature: super::edit::FeatureRef,
+}
+
+/// One junction of a frame member feature.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct JunctionOut {
+    /// What `corner_overrides` names it by: `p12` where ends meet at sketch point `p12`, `p12@l7`
+    /// where an end lands on line `l7`.
+    pub id: String,
+    /// `L` (two ends at an angle), `I` (two ends in line), `T` (ends landing on another member) or
+    /// `Multi` (three or more ends at a point).
+    pub kind: String,
+    /// Where, in mm.
+    pub at: [f64; 3],
+    /// The member ends that meet, each `[line id, "start" | "end"]`.
+    pub ends: Vec<(String, String)>,
+    /// For a T: the line the ends land on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<String>,
+    /// What it gets: `none`, `mitre` or `butt`.
+    pub treatment: TreatmentParam,
+    /// Its weld gap, mm.
+    pub gap: f64,
+    pub butt_cut: ButtCutParam,
+    /// For a butt with its own `through`: the line that runs through.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
+    /// It has settings of its own in `corner_overrides`.
+    pub overridden: bool,
+}
+
+/// `frame.junctions`'s result.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct JunctionsResult {
+    pub feature: u64,
+    pub junctions: Vec<JunctionOut>,
 }
 
 /// `frame.member`'s parameters: [`FrameMemberKeys`], reading the section's keys only as the

@@ -7,10 +7,11 @@
 use solidcraft_geom::prelude::*;
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use solidcore_record::{Loop2, Seg2, Vec2};
 use solidcraft_doc::frame::sizes::{self, Family};
 use solidcraft_doc::frame::{self, Anchor, MemberProfile, Profile, ProfileSpec};
+use solidcraft_doc::frame_corner::{CornerDefaults, CornerOverride, End, MAX_OVERRIDES, Treatment};
 use solidcraft_doc::{FeatureKind, SketchId};
 use solidcraft_sketch::Sketch;
 
@@ -20,8 +21,9 @@ use super::{CommandSpec, in_sketch, not_in_sketch};
 use crate::params::{bad, bool_, expr, num, str_, string_list, vec2};
 use crate::schema::features::FeatureResult;
 use crate::schema::frame::{
-    CreatedIds, FrameMemberParams, ProfileInsertParams, ProfileInsertResult, ProfileKindInfo, ProfileListParams, ProfileListResult, ProfileOut,
-    ProfilePropertiesParams, ProfilePropertiesResult, ProfileSection, SizeFamilyInfo,
+    ButtCutParam, CornerOverrides, CornersParam, CreatedIds, FrameMemberParams, JunctionOut, JunctionsParams, JunctionsResult, LineId,
+    ProfileInsertParams, ProfileInsertResult, ProfileKindInfo, ProfileListParams, ProfileListResult, ProfileOut, ProfilePropertiesParams,
+    ProfilePropertiesResult, ProfileSection, SizeFamilyInfo, TreatmentParam,
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
@@ -34,6 +36,7 @@ const MEMBER_CONTRACT: TypedContract<FrameMemberParams> = TypedContract::new();
 const LIST_CONTRACT: TypedContract<ProfileListParams> = TypedContract::new();
 const PROPERTIES_CONTRACT: TypedContract<ProfilePropertiesParams> = TypedContract::new();
 const INSERT_CONTRACT: TypedContract<ProfileInsertParams> = TypedContract::new();
+const JUNCTIONS_CONTRACT: TypedContract<JunctionsParams> = TypedContract::new();
 
 /// The profile parameter, as every frame command documents it.
 macro_rules! profile_doc {
@@ -54,6 +57,13 @@ pub static COMMANDS: &[CommandSpec] = &[
         profile_doc!(),
         " | profile_sketch: a sketch whose profile is the section, in its own x and y around its origin, with profiles?: picks as solid.extrude takes them (default: its material, nested loops alternating, so two circles make a tube) | library: a profile of the design's profile library, by id or name (frame.library.list; editing it changes the members); anchor?: origin|center|centroid|top_left|top|top_right|left|right|bottom_left|bottom|bottom_right (the profile point that sits on each line, default origin); point?: a placement point by name, used instead of locate and anchor (frame.profile.points lists a profile's: an angle's heel_inside, a channel's web_back…; default a library profile's default point, else locate, else anchor); locate?: [x,y] (the profile point that sits on each line, in mm from the profile's own origin: a bar's or an angle's bottom-left corner, a channel's web back at mid-height, the centre of other profiles; takes precedence over `anchor` and keeps the member attached at that point when the profile size changes); angle?: angle expr (the profile turned about the line; default 0: its y as near world up as the line allows, a vertical member's x along world X); mirror?: bool (the profile mirrored across its y axis); name?; body_name? (what the members are named after, then numbered: `Rail`, `Rail (2)`…; default the size's name, `RSC 203x89`, the profile's description, `Rect Tube 40x40x3`, or the profile sketch's name); names?: {line id: name} (names to keep, as Edit Feature keeps them). One body per line, from its start to its end; each member keeps its name when other lines are added or deleted. Returns the feature and the bodies it made"
     )),
+    CommandSpec::new("frame.junctions", "Frame Junctions", crate::checked!("frame.junctions", junctions))
+        .icon("frame_member")
+        .noundo()
+        .doc_only()
+        .contract(&JUNCTIONS_CONTRACT)
+        .output(output_schema_for::<JunctionsResult>)
+        .params("feature: a frame member feature (id or name). Returns junctions: [{id, kind: L|I|T|Multi, at: [x,y,z] mm, ends: [[line id, start|end]], span? (the line a T lands on), treatment: none|mitre|butt, gap (mm), butt_cut: square|flush, through?, overridden}]: where its members meet and what each junction gets; frame.member's corner_overrides takes these ids"),
     CommandSpec::new("frame.profile.list", "Profile Library", crate::checked!("frame.profile.list", list))
         .icon("library")
         .noundo()
@@ -250,6 +260,104 @@ fn add_loop(sk: &mut Sketch, l: &Loop2, fixed: bool, cmd: &str) -> Result<()> {
     Ok(())
 }
 
+/// `frame.member`'s `corners` (default: mitre) and `corner_overrides`.
+fn corner_params(s: &Session, cmd: &str, p: &Value) -> Result<(CornerDefaults, BTreeMap<String, CornerOverride>)> {
+    let gap = |e: Option<solidcraft_doc::Expr>, what: &str| -> Result<Option<solidcraft_doc::Expr>> {
+        let Some(e) = e else { return Ok(None) };
+        check_expr(s, &e, solidcraft_doc::expr::Kind::Length, cmd, what)?;
+        Ok(Some(e))
+    };
+    let corners = match p.get("corners") {
+        None | Some(Value::Null) => CornerDefaults::mitre(),
+        Some(v) => {
+            let c: CornersParam = serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("`corners`: {e}")))?;
+            CornerDefaults {
+                within_group: c.treatment.map_or(Treatment::Mitre, Into::into),
+                gap_within: gap(c.gap.map(|g| g.0), "corners.gap")?,
+                butt_cut: c.butt_cut.map(Into::into).unwrap_or_default(),
+                butt_through: c.butt_through.map(Into::into).unwrap_or_default(),
+            }
+        }
+    };
+    let overrides = match p.get("corner_overrides") {
+        None | Some(Value::Null) => BTreeMap::new(),
+        Some(v) => {
+            let CornerOverrides(m) = serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("`corner_overrides`: {e}")))?;
+            if m.len() > MAX_OVERRIDES {
+                return Err(bad(cmd, format!("`corner_overrides` holds at most {MAX_OVERRIDES} junctions")));
+            }
+            let mut out = BTreeMap::new();
+            for (id, o) in m {
+                let key = id.trim();
+                if key.is_empty() || key.len() > 256 {
+                    return Err(bad(cmd, "`corner_overrides`: a junction id must be 1…256 characters"));
+                }
+                let through = match o.through {
+                    Some(LineId(t)) if t.trim().is_empty() => return Err(bad(cmd, format!("`corner_overrides.{key}.through` must be a line id"))),
+                    t => t.map(|LineId(t)| t.trim().to_string()),
+                };
+                let o = CornerOverride {
+                    treatment: o.treatment.map(Into::into),
+                    through,
+                    gap: gap(o.gap.map(|g| g.0), &format!("corner_overrides.{key}.gap"))?,
+                    butt_cut: o.butt_cut.map(Into::into),
+                };
+                out.insert(key.to_string(), o);
+            }
+            out
+        }
+    };
+    Ok((corners, overrides))
+}
+
+/// `frame.member`'s `corners` for a feature's corner settings, as an edit keeps them.
+pub(crate) fn corners_param(c: &CornerDefaults) -> Value {
+    let mut out = json!({ "treatment": c.within_group });
+    if let Some(g) = &c.gap_within {
+        out["gap"] = json!(g);
+    }
+    if !c.butt_cut.is_square() {
+        out["butt_cut"] = json!(c.butt_cut);
+    }
+    if !c.butt_through.is_longer() {
+        out["butt_through"] = json!(c.butt_through);
+    }
+    out
+}
+
+fn junctions(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.junctions";
+    let a: JunctionsParams = crate::schema::frame_library::typed(cmd, p)?;
+    let id = super::edit::feature_id(s, Some(&a.feature.0), cmd)?;
+    let f = s.doc.feature(id).ok_or_else(|| bad(cmd, format!("no feature {id}")))?;
+    if !matches!(f.kind, FeatureKind::FrameMember { .. }) {
+        return Err(bad(cmd, format!("{} is not a frame member feature", f.name)));
+    }
+    let st = s.model.state();
+    let found = frame::feature_junctions(&s.doc, &st, f).map_err(|e| bad(cmd, e.to_string()))?;
+    let treatment = |t: Treatment| match t {
+        Treatment::None => TreatmentParam::None,
+        Treatment::Mitre => TreatmentParam::Mitre,
+        Treatment::Butt => TreatmentParam::Butt,
+    };
+    let junctions = found
+        .into_iter()
+        .map(|j| JunctionOut {
+            id: j.id,
+            kind: format!("{:?}", j.kind),
+            at: j.at,
+            ends: j.ends.into_iter().map(|(l, e)| (l, if e == End::Start { "start".into() } else { "end".into() })).collect(),
+            span: j.span,
+            treatment: treatment(j.treatment),
+            gap: j.gap,
+            butt_cut: if j.butt_cut.is_square() { ButtCutParam::Square } else { ButtCutParam::Flush },
+            through: j.through,
+            overridden: j.overridden,
+        })
+        .collect();
+    frame_reply(cmd, JunctionsResult { feature: id, junctions })
+}
+
 fn member(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "frame.member";
     let path_sketch = sketch_id(s, p.get("sketch"), cmd, "sketch")?;
@@ -362,6 +470,7 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
             .collect::<Result<_>>()?,
         Some(_) => return Err(bad(cmd, format!("`names` must map up to {} line ids to names", frame::MAX_MEMBERS))),
     };
+    let (corners, corner_overrides) = corner_params(s, cmd, p)?;
     let base = body_name.clone().unwrap_or(default_name);
     let mut kind = FeatureKind::FrameMember {
         path_sketch: SketchId(path_sketch),
@@ -374,6 +483,8 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
         mirror,
         body_name,
         names: BTreeMap::new(),
+        corners,
+        corner_overrides,
     };
     // Each member's name is pinned to its line as the feature is made, so deleting or adding a
     // line later leaves the other members' names alone.

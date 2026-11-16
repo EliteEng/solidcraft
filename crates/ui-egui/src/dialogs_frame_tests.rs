@@ -730,3 +730,49 @@ fn a_personal_profile_is_offered_and_copied_into_the_design() {
     let mut e = edit_dialog(&app, f, None).unwrap();
     assert_eq!(member(&mut e).library.as_deref(), Some("lp1"));
 }
+
+/// Corners: mitre by default, or none with the square-ends preference; the treatment, gap and
+/// flush cut reach the command and come back when editing, and an edit keeps a junction's own
+/// settings.
+#[test]
+fn corners_reach_the_command_and_come_back_when_editing() {
+    let mut app = frame_app();
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines);
+    assert_eq!(apply_commands(&app, &d).unwrap()[0].1["corners"], json!({"treatment": "mitre"}));
+    let m = member(&mut d);
+    m.corner = CORNERS.iter().position(|c| c.0 == "butt").unwrap();
+    m.gap = "2 mm".into();
+    m.flush = true;
+    m.through = BUTT_THROUGH.iter().position(|t| t.0 == "shorter").unwrap();
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].1["corners"], json!({"treatment": "butt", "gap": "2 mm", "butt_cut": "flush", "butt_through": "shorter"}));
+    run_all(&mut app, c);
+    let f = app.session.doc.features.last().unwrap().id;
+    // A junction of its own, set by command, survives the dialog's edit.
+    let j = app.run("frame.junctions", json!({"feature": f})).unwrap();
+    let corner = j["junctions"][0]["id"].as_str().unwrap().to_string();
+    app.run(
+        "timeline.redefine",
+        json!({"feature": f, "command": "frame.member", "params": {"sketch": "Frame", "lines": lines, "profile": {"kind": "rect_tube", "width": 40, "height": 40, "wall": 3}, "corners": {"treatment": "butt", "gap": "2 mm", "butt_cut": "flush", "butt_through": "shorter"}, "corner_overrides": {corner.clone(): {"treatment": "mitre"}}}}),
+    )
+    .unwrap();
+    let mut e = edit_dialog(&app, f, None).unwrap();
+    let m = member(&mut e);
+    assert_eq!((CORNERS[m.corner].0, m.gap.as_str(), m.flush, BUTT_THROUGH[m.through].0), ("butt", "2 mm", true, "shorter"));
+    m.gap.clear();
+    let c = apply_commands(&app, &e).unwrap();
+    run_all(&mut app, c);
+    let j = app.run("frame.junctions", json!({"feature": f})).unwrap();
+    let it = j["junctions"].as_array().unwrap().iter().find(|x| x["id"] == corner.as_str()).unwrap().clone();
+    assert_eq!((it["treatment"].as_str(), it["overridden"].as_bool()), (Some("mitre"), Some(true)), "{j}");
+    assert!(
+        j["junctions"].as_array().unwrap().iter().filter(|x| x["id"] != corner.as_str()).all(|x| x["gap"] == 0.0 && x["treatment"] == "butt"),
+        "{j}"
+    );
+    // The preference keeps the old square ends for new members.
+    app.preferences.frame_square_ends = true;
+    let mut d = dialog_on(&mut app, &lines);
+    assert_eq!(CORNERS[member(&mut d).corner].0, "none");
+    assert_eq!(apply_commands(&app, &d).unwrap()[0].1["corners"], json!({"treatment": "none"}));
+}

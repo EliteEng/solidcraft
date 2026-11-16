@@ -2437,6 +2437,17 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
     {
         parameters.entry("names").or_insert_with(|| json!(names));
     }
+    // Members keep their corners through an edit that doesn't give them (an older design keeps
+    // its square ends), and their junctions' own settings.
+    if let FeatureKind::FrameMember { corners, corner_overrides, .. } = &old.kind
+        && cid == "frame.member"
+        && let Some(parameters) = params.as_object_mut()
+    {
+        parameters.entry("corners").or_insert_with(|| super::frame::corners_param(corners));
+        if !corner_overrides.is_empty() {
+            parameters.entry("corner_overrides").or_insert_with(|| json!(corner_overrides));
+        }
+    }
     // A fold keeps the side that stays, decided when it was made, through an edit that names
     // neither a side nor a fixed point: the side is never decided again.
     if let FeatureKind::SheetFold { stays: Some(side), .. } = &old.kind

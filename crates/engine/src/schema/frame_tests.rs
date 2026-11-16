@@ -45,6 +45,8 @@ fn schemas_and_the_key_check_agree() {
             "anchor",
             "angle",
             "body_name",
+            "corner_overrides",
+            "corners",
             "exact_regions",
             "library",
             "lines",

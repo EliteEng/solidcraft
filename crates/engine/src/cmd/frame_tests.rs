@@ -232,13 +232,19 @@ fn members_follow_every_line_of_a_rectangle() {
     assert_eq!(bs.len(), 4, "{r}");
     let names: Vec<&str> = bs.iter().map(|b| b.0.as_str()).collect();
     assert_eq!(names, ["Rect Tube 40x40x3", "Rect Tube 40x40x3 (2)", "Rect Tube 40x40x3 (3)", "Rect Tube 40x40x3 (4)"]);
-    // Each member is the section run the length of its line: 2 × 600 + 2 × 400.
+    // The corners are mitred (a new feature's default): each member runs to the frame's outside
+    // corners, and as its section is symmetric across the mitre, holds the section times its line's
+    // length: 2 × 600 + 2 × 400.
     let v = total_volume(&mut s);
     assert!(rel(v, tube_area() * 2000.0) < MEASURED, "{v} vs {}", tube_area() * 2000.0);
+    for b in &bs {
+        let line = if b.3[0] - b.2[0] > 100.0 { 600.0 } else { 400.0 };
+        assert!(rel(b.1, tube_area() * line) < MEASURED, "{} holds {} vs {}", b.0, b.1, tube_area() * line);
+    }
     // The bottom line runs along +X: the profile is centred on it, square to it.
-    assert!(bs.iter().any(|b| near3(b.2, [0.0, -20.0, -20.0]) && near3(b.3, [600.0, 20.0, 20.0])), "{bs:?}");
+    assert!(bs.iter().any(|b| near3(b.2, [-20.0, -20.0, -20.0]) && near3(b.3, [620.0, 20.0, 20.0])), "{bs:?}");
     // The right line runs along Y at x = 600.
-    assert!(bs.iter().any(|b| near3(b.2, [580.0, 0.0, -20.0]) && near3(b.3, [620.0, 400.0, 20.0])), "{bs:?}");
+    assert!(bs.iter().any(|b| near3(b.2, [580.0, -20.0, -20.0]) && near3(b.3, [620.0, 420.0, 20.0])), "{bs:?}");
 }
 
 /// A member's body name counts characters, as the refusal says: a hundred `ł` (200 bytes) is
@@ -262,7 +268,8 @@ fn member_body_names_count_characters_not_bytes() {
 fn members_are_made_of_a_standard_size_by_name() {
     let mut s = Session::default();
     rectangle_frame(&mut s);
-    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": {"size": "RSC 203x89"}}));
+    // Square ends that overlap, so each member is its line's length.
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": {"size": "RSC 203x89"}, "corners": {"treatment": "none"}}));
     let bs = bodies(&mut s);
     let names: Vec<&str> = bs.iter().map(|b| b.0.as_str()).collect();
     assert_eq!(names, ["RSC 203x89", "RSC 203x89 (2)", "RSC 203x89 (3)", "RSC 203x89 (4)"]);
@@ -347,7 +354,7 @@ fn members_along_3d_sketch_lines() {
     run(&mut s, "sketch.options", json!({"sketch_3d": true}));
     run(&mut s, "sketch.line3d", json!({"points": [[0, 0, 0], [0, 0, 1500], [600, 0, 1500]]}));
     run(&mut s, "sketch.finish", json!({}));
-    run(&mut s, "frame.member", json!({"sketch": "Tower", "profile": tube()}));
+    run(&mut s, "frame.member", json!({"sketch": "Tower", "profile": tube(), "corners": {"treatment": "none"}}));
     let bs = bodies(&mut s);
     assert_eq!(bs.len(), 2, "{bs:?}");
     // The upright: square to Z, the profile's x along world X.
@@ -597,7 +604,7 @@ fn a_profile_sketch_on_a_face_is_its_drawn_section() {
 fn members_keep_their_names_when_a_line_is_deleted() {
     let mut s = Session::default();
     rectangle_frame(&mut s);
-    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}));
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "none"}}));
     let before = boxes(&mut s);
     assert_eq!(before.len(), 4);
     let right = line_at_x(&s, "Frame", 600.0);
@@ -614,7 +621,7 @@ fn members_keep_their_names_when_a_line_is_deleted() {
 fn a_renamed_member_keeps_its_name_through_line_edits() {
     let mut s = Session::default();
     rectangle_frame(&mut s);
-    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}));
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "none"}}));
     let top = boxes(&mut s).into_iter().find(|(_, (lo, _))| (lo[1] - 380.0).abs() < 1e-6).unwrap();
     run(&mut s, "body.rename", json!({"body": top.0, "name": "Top rail"}));
     let before = boxes(&mut s);
@@ -650,7 +657,7 @@ fn an_asymmetric_profile_turns_with_its_3d_line() {
     run(&mut s, "sketch.options", json!({"sketch_3d": true}));
     run(&mut s, "sketch.line3d", json!({"points": [[0, 0, 0], [0, 0, 1500], [600, 0, 1500]]}));
     run(&mut s, "sketch.finish", json!({}));
-    run(&mut s, "frame.member", json!({"sketch": "Tower", "profile": {"kind": "bar", "width": 60, "height": 10}}));
+    run(&mut s, "frame.member", json!({"sketch": "Tower", "profile": {"kind": "bar", "width": 60, "height": 10}, "corners": {"treatment": "none"}}));
     let bs = bodies(&mut s);
     // The post: the bar's width (its x) along world X, its height along Y.
     assert!(bs.iter().any(|b| near3(b.2, [-30.0, -5.0, 0.0]) && near3(b.3, [30.0, 5.0, 1500.0])), "{bs:?}");
@@ -756,7 +763,7 @@ fn listing_a_line_twice_is_refused() {
 fn editing_the_feature_keeps_member_names_until_it_names_them() {
     let mut s = Session::default();
     rectangle_frame(&mut s);
-    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}))["feature"].clone();
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "none"}}))["feature"].clone();
     let top = boxes(&mut s).into_iter().find(|(_, (lo, _))| (lo[1] - 380.0).abs() < 1e-6).unwrap().0;
     run(&mut s, "body.rename", json!({"body": top, "name": "Top rail"}));
     let names: Vec<String> = boxes(&mut s).into_keys().collect();
@@ -1642,4 +1649,191 @@ fn rotate_member_hostile_params_never_panic() {
     let huge = brace_turned("1e300 deg");
     let remainder = (1e300_f64.to_radians().rem_euclid(std::f64::consts::TAU)).to_degrees();
     assert!(same_box(huge, brace_turned(&format!("{remainder} deg"))), "{huge:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Corners (docs/design/weldments.md, section 3)
+
+/// Each member's length along its line's axis, by the line's id, from its bounding box.
+fn spans(s: &mut Session, lines: &[(String, usize)]) -> std::collections::BTreeMap<String, (f64, f64)> {
+    let r = run(s, "inspect.measure", json!({}));
+    let bs = r["bodies"].as_array().unwrap();
+    lines.iter().zip(bs).map(|((id, axis), b)| (id.clone(), (f(&b["bbox"]["min"][*axis]), f(&b["bbox"]["max"][*axis])))).collect()
+}
+
+/// The rectangle's lines, in member order, each with the axis it runs along.
+fn rectangle_lines(s: &Session) -> Vec<(String, usize)> {
+    sketch_lines(s, "Frame").into_iter().map(|(id, a, b)| (id, if (a[1] - b[1]).abs() < 1e-9 { 0 } else { 1 })).collect()
+}
+
+fn near(got: (f64, f64), want: (f64, f64)) -> bool {
+    (got.0 - want.0).abs() < 1e-6 && (got.1 - want.1).abs() < 1e-6
+}
+
+#[test]
+fn a_rectangle_mitres_with_its_weld_gap() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"gap": 2}}));
+    // Each mitre plane moves 1 mm off the corner along its normal, √2 mm along each member: a
+    // member holds the section times its line's length less 2√2.
+    for b in bodies(&mut s) {
+        let line = if b.3[0] - b.2[0] > 500.0 { 600.0 } else { 400.0 };
+        let want = tube_area() * (line - 2.0 * 2f64.sqrt());
+        assert!(rel(b.1, want) < MEASURED, "{} holds {} vs {want}", b.0, b.1);
+    }
+    // The faces are exactly 45°: the bottom member's outside corner reaches x = −20 + √2 and its
+    // inside corner x = 20 + √2.
+    let r = run(&mut s, "inspect.measure", json!({}));
+    let bottom = &r["bodies"][0];
+    assert!((f(&bottom["bbox"]["min"][0]) - (-20.0 + 2f64.sqrt())).abs() < 1e-6, "{bottom}");
+}
+
+#[test]
+fn butts_run_the_longer_or_the_shorter_members_through_and_stop_the_others_at_their_faces() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines = rectangle_lines(&s);
+    let fid =
+        run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "butt", "gap": 3}}))["feature"].clone();
+    let check = |s: &mut Session, want: [(f64, f64); 4], what: &str| {
+        let got = spans(s, &lines);
+        for ((id, _), w) in lines.iter().zip(want) {
+            assert!(near(got[id], w), "{what}: {id}: {:?} vs {w:?} ({got:?})", got[id]);
+        }
+    };
+    // By default the longer (600 mm) members run through to the others' far faces at every
+    // corner; the shorter stop 3 mm short of their near faces. Drawn bottom, right, top, left.
+    check(&mut s, [(-20.0, 620.0), (23.0, 377.0), (-20.0, 620.0), (23.0, 377.0)], "longer");
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid.clone()}));
+    assert!(j["junctions"].as_array().unwrap().iter().all(|x| lines.iter().any(|(id, h)| *h == 0 && x["through"] == id.as_str())), "{j}");
+    // `shorter` swaps every corner.
+    let params = json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "butt", "gap": 3, "butt_through": "shorter"}});
+    run(&mut s, "timeline.redefine", json!({"feature": fid.clone(), "command": "frame.member", "params": params}));
+    check(&mut s, [(23.0, 577.0), (-20.0, 420.0), (23.0, 577.0), (-20.0, 420.0)], "shorter");
+    // One corner's `through` wins over the rule: at the bottom right the bottom runs through.
+    let (bottom, right) = (lines[0].0.clone(), lines[1].0.clone());
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid.clone()}));
+    let corner = j["junctions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| {
+            x["ends"].as_array().unwrap().iter().any(|e| e[0] == bottom.as_str())
+                && x["ends"].as_array().unwrap().iter().any(|e| e[0] == right.as_str())
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let params = json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "butt", "gap": 3, "butt_through": "shorter"}, "corner_overrides": {corner: {"through": bottom}}});
+    run(&mut s, "timeline.redefine", json!({"feature": fid, "command": "frame.member", "params": params}));
+    check(&mut s, [(23.0, 620.0), (23.0, 420.0), (23.0, 577.0), (-20.0, 420.0)], "one corner swapped");
+}
+
+#[test]
+fn a_cross_bar_butts_against_the_rails_it_lands_on() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Frame"}));
+    run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [600, 400]}));
+    run(&mut s, "sketch.line", json!({"points": [[300, 0], [300, 400]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}))["feature"].clone();
+    let bar = line_at_x(&s, "Frame", 300.0);
+    let lines = rectangle_lines(&s);
+    let got = spans(&mut s, &lines);
+    assert!(near(got[&bar], (20.0, 380.0)), "the bar stops at the rails' faces: {got:?}");
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid}));
+    let ids: Vec<&str> = j["junctions"].as_array().unwrap().iter().map(|j| j["id"].as_str().unwrap()).collect();
+    let tees: Vec<&Value> = j["junctions"].as_array().unwrap().iter().filter(|j| j["kind"] == "T").collect();
+    assert_eq!(tees.len(), 2, "{j}");
+    assert!(tees.iter().all(|t| t["treatment"] == "butt" && t["ends"][0][0] == bar), "{j}");
+    assert_eq!(ids.iter().filter(|id| !id.contains('@')).count(), 4, "four mitred corners: {j}");
+    assert!(j["junctions"].as_array().unwrap().iter().filter(|j| j["kind"] == "L").all(|j| j["treatment"] == "mitre"));
+}
+
+#[test]
+fn a_corner_override_changes_one_junction_and_is_kept_through_edits() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines = rectangle_lines(&s);
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}))["feature"].clone();
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid}));
+    // The corner where the bottom (first) line starts: butt it with the left line running through.
+    let (bottom, left) = (&lines[0].0, &lines[3].0);
+    let corner =
+        j["junctions"].as_array().unwrap().iter().find(|j| j["ends"].as_array().unwrap().iter().any(|e| e[0] == *bottom && e[1] == "start")).unwrap()
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let over = json!({ corner.clone(): {"treatment": "butt", "through": left} });
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": fid, "command": "frame.member", "params": {"sketch": "Frame", "profile": tube(), "corner_overrides": over}}),
+    );
+    let got = spans(&mut s, &lines);
+    assert!(near(got[bottom], (20.0, 620.0)), "bottom butts at its start, mitres at its end: {got:?}");
+    assert!(near(got[left], (-20.0, 420.0)), "left runs through at the bottom, mitres at the top: {got:?}");
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid}));
+    let it = j["junctions"].as_array().unwrap().iter().find(|j| j["id"] == corner.as_str()).unwrap().clone();
+    assert_eq!((it["treatment"].as_str(), it["through"].as_str(), it["overridden"].as_bool()), (Some("butt"), Some(left.as_str()), Some(true)));
+    // An edit that doesn't give the overrides (or the corners) keeps them; save and reopen too.
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": fid, "command": "frame.member", "params": {"sketch": "Frame", "profile": tube(), "body_name": "Rail"}}),
+    );
+    assert!(near(spans(&mut s, &lines)[bottom], (20.0, 620.0)));
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    assert!(near(spans(&mut reopened, &lines)[bottom], (20.0, 620.0)));
+}
+
+#[test]
+fn a_feature_without_corners_keeps_square_ends_and_saves_none() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines = rectangle_lines(&s);
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "none"}}))["feature"].clone();
+    let got = spans(&mut s, &lines);
+    assert!(near(got[&lines[0].0], (0.0, 600.0)) && near(got[&lines[1].0], (0.0, 400.0)), "{got:?}");
+    // As a design saved before corners existed reads.
+    let saved: Value = serde_json::from_str(&s.doc.to_json()).unwrap();
+    let text = saved["features"].to_string();
+    assert!(!text.contains("corners") && !text.contains("corner_overrides"), "nothing saved for no corners: {text}");
+    // Editing it without corners keeps it square.
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": fid, "command": "frame.member", "params": {"sketch": "Frame", "profile": tube(), "body_name": "Rail"}}),
+    );
+    assert!(near(spans(&mut s, &lines)[&lines[0].0], (0.0, 600.0)));
+}
+
+#[test]
+fn bad_corners_are_refused_with_the_reason() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    for (corners, why) in [
+        (json!({"treatment": "weld"}), "corners"),
+        (json!({"gap": "5 deg"}), "corners.gap"),
+        (json!({"gap": -1}), "must not be negative"),
+        (json!({"colour": "red"}), "corners"),
+    ] {
+        let err = s.execute("frame.member", &json!({"sketch": "Frame", "profile": tube(), "corners": corners})).unwrap_err().to_string();
+        assert!(err.contains(why), "{corners}: {err}");
+    }
+    let err = s
+        .execute("frame.member", &json!({"sketch": "Frame", "profile": tube(), "corner_overrides": {"p1": {"through": " "}}}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("through"), "{err}");
+    // A member too short for its mitre: refused, naming the junction and what to try.
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Short"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [10, 0], [-200, 30]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let err = s.execute("frame.member", &json!({"sketch": "Short", "profile": tube()})).unwrap_err().to_string();
+    assert!(err.contains("junction") && err.contains("butt or none"), "{err}");
+    assert!(bodies(&mut s).is_empty(), "nothing is made");
 }

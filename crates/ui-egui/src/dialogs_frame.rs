@@ -62,7 +62,21 @@ pub struct Member {
     pub angle: String,
     pub mirror: bool,
     pub name: String,
+    /// What is done where members meet: an index into [`CORNERS`].
+    pub corner: usize,
+    /// The weld gap at every junction; empty: none.
+    pub gap: String,
+    /// Butting members are cut on the face they meet, not square.
+    pub flush: bool,
+    /// Which pieces run through at a butt: an index into [`BUTT_THROUGH`].
+    pub through: usize,
 }
+
+/// The Corners choices, as `frame.member`'s `corners.treatment` spells them, with their labels.
+pub const CORNERS: [(&str, &str); 3] = [("mitre", "ui.frame_corner_mitre"), ("butt", "ui.frame_corner_butt"), ("none", "ui.frame_corner_none")];
+
+/// The Runs through choices, as `corners.butt_through` spells them, with their labels.
+pub const BUTT_THROUGH: [(&str, &str); 2] = [("longer", "ui.frame_through_longer"), ("shorter", "ui.frame_through_shorter")];
 
 impl Member {
     fn new() -> Member {
@@ -91,14 +105,23 @@ impl Member {
             angle: String::new(),
             mirror: false,
             name: String::new(),
+            corner: 0,
+            gap: String::new(),
+            flush: false,
+            through: 0,
         }
     }
 }
 
-/// The dialog for Frame Member.
-pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+/// The dialog for Frame Member. New members mitre their corners unless the preference keeps
+/// square ends.
+pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+    let mut m = Member::new();
+    if app.preferences.frame_square_ends {
+        m.corner = CORNERS.iter().position(|c| c.0 == "none").unwrap_or(0);
+    }
     (id == "frame.member")
-        .then(|| (Kind::Frame(Member::new()), vec![SelInput::new("Lines", SKETCH_LINES, true), SelInput::new("Section (optional)", PROFILES, true)]))
+        .then(|| (Kind::Frame(m), vec![SelInput::new("Lines", SKETCH_LINES, true), SelInput::new("Section (optional)", PROFILES, true)]))
 }
 
 fn tr(text: &str) -> &str {
@@ -159,6 +182,16 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &[Sel
     point_row(app, ui, m, picked || m.whole.is_some());
     enter |= hint_row(ui, "Angle", &mut m.angle, "0 deg");
     form_row(ui, "Mirror", |ui| check(ui, &mut m.mirror));
+    let labels: Vec<&str> = CORNERS.iter().map(|c| tr(c.1)).collect();
+    choice_row(ui, "ui.frame_corners", "frame_corners", &mut m.corner, &labels);
+    if CORNERS.get(m.corner).is_some_and(|c| c.0 != "none") {
+        enter |= hint_row(ui, "ui.frame_weld_gap", &mut m.gap, "0 mm");
+        form_row(ui, "ui.frame_butt_flush", |ui| check(ui, &mut m.flush));
+    }
+    if CORNERS.get(m.corner).is_some_and(|c| c.0 == "butt") {
+        let labels: Vec<&str> = BUTT_THROUGH.iter().map(|c| tr(c.1)).collect();
+        choice_row(ui, "ui.frame_butt_through", "frame_butt_through", &mut m.through, &labels);
+    }
     enter |= text_row(ui, "Name", &mut m.name, tr("from the profile")).0;
     enter
 }
@@ -508,6 +541,7 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
     if m.mirror {
         p["mirror"] = json!(true);
     }
+    p["corners"] = corners(m);
     if let Value::Object(o) = &mut p {
         for (key, v) in extra {
             o.entry(key.clone()).or_insert_with(|| v.clone());
@@ -516,9 +550,29 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
     Ok(vec![("frame.member".to_string(), p)])
 }
 
+/// `frame.member`'s `corners` for the Corners rows.
+fn corners(m: &Member) -> Value {
+    let treatment = CORNERS.get(m.corner).map_or("mitre", |c| c.0);
+    let mut c = json!({ "treatment": treatment });
+    if treatment != "none" {
+        if !m.gap.trim().is_empty() {
+            c["gap"] = json!(m.gap.trim());
+        }
+        if m.flush {
+            c["butt_cut"] = json!("flush");
+        }
+        if let Some((through, _)) = BUTT_THROUGH.get(m.through).filter(|t| t.0 != "longer") {
+            c["butt_through"] = json!(through);
+        }
+    }
+    c
+}
+
 /// The dialog editing a frame member feature, filled from it.
 pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelInput>, Map<String, Value>)> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, .. } = kind else { return None };
+    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, corners, .. } = kind else {
+        return None;
+    };
     let (_, mut inputs) = start(app, "frame.member")?;
     let st = app.session.model.state();
     let mut m = Member::new();
@@ -554,6 +608,12 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
     m.angle = angle.as_deref().map(|a| shown_expr(a, ValueKind::Angle)).unwrap_or_default();
     m.mirror = *mirror;
     m.name = body_name.clone().unwrap_or_default();
+    let treatment = serde_json::to_value(corners.within_group).ok();
+    m.corner = CORNERS.iter().position(|c| treatment.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
+    m.gap = corners.gap_within.as_deref().map(|g| shown_expr(g, ValueKind::Length)).unwrap_or_default();
+    m.flush = !corners.butt_cut.is_square();
+    let through = serde_json::to_value(corners.butt_through).ok();
+    m.through = BUTT_THROUGH.iter().position(|c| through.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
     // The dialog has no field for a located point: an edit keeps it, so the member stays where it
     // is attached.
     let mut extra = Map::new();

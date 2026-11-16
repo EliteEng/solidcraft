@@ -44,8 +44,31 @@ impl Walk for usize {}
 impl Walk for u32 {}
 impl Walk for crate::newer_file::RawFeature {}
 impl Walk for ProfileSel {}
-impl Walk for std::collections::BTreeMap<String, String> {}
+/// A map walks its values, in key order.
+impl<T: Walk> Walk for std::collections::BTreeMap<String, T> {
+    fn walk_exprs<'a>(&'a self, f: &mut dyn FnMut(ExprItem<'a>)) {
+        self.values().for_each(|t| t.walk_exprs(f))
+    }
+    fn walk_exprs_mut<'a>(&'a mut self, f: &mut dyn FnMut(ExprItemMut<'a>)) {
+        self.values_mut().for_each(|t| t.walk_exprs_mut(f))
+    }
+    fn walk_refs<'a>(&'a self, f: &mut dyn FnMut(RefItem<'a>)) {
+        self.values().for_each(|t| t.walk_refs(f))
+    }
+    fn walk_refs_mut<'a>(&'a mut self, f: &mut dyn FnMut(RefItemMut<'a>)) {
+        self.values_mut().for_each(|t| t.walk_refs_mut(f))
+    }
+    fn walk_geometry<'a>(&'a self, f: &mut dyn FnMut(GeoItem<'a>)) {
+        self.values().for_each(|t| t.walk_geometry(f))
+    }
+    fn walk_geometry_mut<'a>(&'a mut self, f: &mut dyn FnMut(GeoItemMut<'a>)) {
+        self.values_mut().for_each(|t| t.walk_geometry_mut(f))
+    }
+}
 impl Walk for crate::frame::Anchor {}
+impl Walk for crate::frame_corner::Treatment {}
+impl Walk for crate::frame_corner::ButtCut {}
+impl Walk for crate::frame_corner::ButtThrough {}
 impl Walk for solidcraft_sketch::Sketch {}
 impl Walk for solidcraft_sketch::PatternAlignment {}
 impl Walk for solidcraft_kernel::StepNode {}
