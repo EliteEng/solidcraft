@@ -467,7 +467,9 @@ adds its one pending format file.
 3. **Junctions and corners** (built on branch `frame-profile-library`, without groups).
    `CornerDefaults` (`within_group`, `gap_within`, `butt_cut`, `butt_through`) and `corner_overrides` on the
    feature, the junction graph and its ids, mitre and butt (square and flush) with gaps,
-   `frame.junctions`, and the Frame Member window's Corners, Weld gap, Flush and Runs through rows (with the
+   `frame.junctions`, the Frame Member window's Corners, Weld gap, Flush and Runs through rows, its
+   corner list (each junction's treatment and through member) and junction markers in the view
+   (a click on a butt swaps it) (with the
    preference `frame_square_ends` keeping square ends for new members). Old designs need no `step`:
    a feature without `corners` reads as no treatment and rebuilds unchanged. Tests: a rectangle
    mitres into four members with exact 45° faces and the given gap; butts with the through member

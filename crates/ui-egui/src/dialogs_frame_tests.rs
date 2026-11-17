@@ -776,3 +776,90 @@ fn corners_reach_the_command_and_come_back_when_editing() {
     assert_eq!(CORNERS[member(&mut d).corner].0, "none");
     assert_eq!(apply_commands(&app, &d).unwrap()[0].1["corners"], json!({"treatment": "none"}));
 }
+
+/// The corner list shows the picked lines' junctions; Swap (or a click on a corner's dot in the
+/// view) runs the other member through at that corner alone, which reaches the command, the
+/// built feature and Edit Feature, and Reset drops it again.
+#[test]
+fn the_corner_list_swaps_one_corner_through_to_the_feature() {
+    use solidcraft_engine::doc::frame_corner::JunctionKind;
+    let mut app = frame_app();
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines);
+    let inputs = d.inputs.clone();
+    let m = member(&mut d);
+    m.corner = CORNERS.iter().position(|c| c.0 == "butt").unwrap();
+    refresh_junctions(&app, m, &inputs);
+    let list = m.junctions.as_ref().unwrap().1.clone();
+    assert_eq!(list.len(), 4, "{list:?}");
+    assert!(list.iter().all(|j| j.kind == JunctionKind::L && j.through.is_some()));
+    let j = list[0].clone();
+    let before = j.through.clone().unwrap();
+    swap_through(m, &j);
+    refresh_junctions(&app, m, &inputs);
+    let through = |m: &Member, id: &str| m.junctions.as_ref().unwrap().1.iter().find(|x| x.id == id).and_then(|x| x.through.clone()).unwrap();
+    let after = through(m, &j.id);
+    assert_ne!(after, before, "the other member runs through");
+    assert_eq!(
+        list[1..].iter().map(|x| through(m, &x.id)).collect::<Vec<_>>(),
+        list[1..].iter().map(|x| x.through.clone().unwrap()).collect::<Vec<_>>(),
+        "the other corners stay"
+    );
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].1["corner_overrides"], json!({j.id.clone(): {"through": after.clone()}}));
+    run_all(&mut app, c);
+    let f = app.session.doc.features.last().unwrap().id;
+    let built = app.run("frame.junctions", json!({"feature": f})).unwrap();
+    let it = built["junctions"].as_array().unwrap().iter().find(|x| x["id"] == j.id.as_str()).unwrap().clone();
+    assert_eq!(it["through"], after.as_str(), "{built}");
+    // Edit Feature brings the corner's setting back; Reset drops it, and OK clears it.
+    let mut e = edit_dialog(&app, f, None).unwrap();
+    let m = member(&mut e);
+    assert_eq!(m.overrides.get(&j.id).and_then(|o| o.through.clone()), Some(after));
+    m.overrides.remove(&j.id);
+    let c = apply_commands(&app, &e).unwrap();
+    assert_eq!((c[0].0.as_str(), &c[0].1["params"]["corner_overrides"]), ("timeline.redefine", &json!({})), "{c:?}");
+    run_all(&mut app, c);
+    let built = app.run("frame.junctions", json!({"feature": f})).unwrap();
+    assert!(built["junctions"].as_array().unwrap().iter().all(|x| x["overridden"] == false), "{built}");
+}
+
+/// With Corners on, each junction is marked in the view, and a click on a butt corner's marker
+/// runs the other member through there.
+#[test]
+fn a_click_on_a_corner_marker_swaps_the_member_that_runs_through() {
+    let mut h = crate::scenario::Harness::new();
+    for (c, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Frame"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [600, 400]})),
+        ("sketch.finish", json!({})),
+        (
+            "frame.member",
+            json!({"sketch": "Frame", "profile": {"kind": "rect_tube", "width": 40, "height": 40, "wall": 3}, "corners": {"treatment": "butt"}}),
+        ),
+    ] {
+        h.app.run(c, p).unwrap();
+    }
+    let f = h.app.session.doc.features.last().unwrap().id;
+    h.app.edit_feature(f);
+    h.frames(3);
+    let rect = h.app.viewport.rect.unwrap();
+    let proj = crate::viewport::projection(&h.app, rect);
+    let Some(Kind::Frame(m)) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("no dialog") };
+    let (j, at) = markers(m, &proj)
+        .into_iter()
+        .find(|(_, c)| rect.shrink(20.0).contains(*c))
+        .map(|(j, c)| (j.clone(), c))
+        .expect("a corner marker in the view");
+    let before = j.through.clone().unwrap();
+    assert!(marker_at(&h.app, &proj, at), "the marker owns the pointer, so the click doesn't pick in the model");
+    assert!(
+        h.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.center.distance(at) < 0.5 && c.radius >= 7.0)),
+        "a marker is drawn at the corner"
+    );
+    h.call("ui.click", json!({"x": at.x, "y": at.y}));
+    h.frames(2);
+    let Some(Kind::Frame(m)) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("no dialog") };
+    let now = m.overrides.get(&j.id).and_then(|o| o.through.clone());
+    assert!(now.is_some() && now.as_deref() != Some(before.as_str()), "{:?}", m.overrides);
+}

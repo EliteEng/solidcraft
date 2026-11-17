@@ -56,6 +56,11 @@ the selected body (or the last body of the active component).
   picks which pieces run through at every corner: the **Longer** ones (the default) or the
   **Shorter** ones. See Corners. The preference
   **New frame members have square ends** (Preferences › Tools) starts it at None.
+- **Corner list** (with Corners on): each junction of the lines picked (`p2 · L`), with its own
+  treatment (**Default** follows Corners) and, at a butt, the line that runs through with a
+  **Swap** button; **Reset** drops the junction's own settings (`corner_overrides`). The view marks
+  every junction with a dot (filled where it has settings of its own) and, at a butt, an arrow
+  along the member that runs through; a click on a butt's dot runs the other member through there.
 - **Point**, **Angle** and **Mirror** place the section on each line, as below. Point lists the
   profile's placement points; with a library profile the first choice is its default point. **Name** names
   the members (default: after the profile).

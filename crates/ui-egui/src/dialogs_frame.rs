@@ -3,10 +3,15 @@
 //! picked in another sketch, or a profile of the design's profile library. A placement point, angle
 //! and mirror place the section on each line.
 
+use std::collections::BTreeMap;
+
+use egui::{Pos2, Rect, Sense, Stroke, vec2};
 use serde_json::{Map, Value, json};
+use solidcore_record::Vec3;
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
 use solidcraft_engine::doc::frame::{self, MemberProfile};
+use solidcraft_engine::doc::frame_corner::{CornerDefaults, CornerOverride, JunctionKind, Treatment};
 use solidcraft_engine::doc::frame_library;
 use solidcraft_engine::doc::{FeatureKind, ProfileSel};
 
@@ -14,6 +19,7 @@ use crate::SolveApp;
 use crate::dialogs::{Kind, check, curves_sketch, form_row, profile_indices, put, shown_expr};
 use crate::selection::{PROFILES, SKETCH_LINES, SelInput, SelectionExt as _};
 use crate::ui_kit::{choice_row, expr_row, hint_row, text_row};
+use crate::viewport::Proj;
 
 /// The anchors as `frame.member` names them, and their labels.
 const ANCHORS: &[(&str, &str)] = &[
@@ -70,6 +76,13 @@ pub struct Member {
     pub flush: bool,
     /// Which pieces run through at a butt: an index into [`BUTT_THROUGH`].
     pub through: usize,
+    /// Junctions' own settings (`corner_overrides`), by junction id.
+    pub overrides: BTreeMap<String, CornerOverride>,
+    /// The junction whose row in the corner list is under the pointer, marked in the view.
+    pub list_hover: Option<String>,
+    /// The junctions the corner list and the view show, with the path and settings they were
+    /// found for (worked out again only when those change).
+    pub junctions: Option<(String, Vec<frame::JunctionReport>)>,
 }
 
 /// The Corners choices, as `frame.member`'s `corners.treatment` spells them, with their labels.
@@ -109,6 +122,9 @@ impl Member {
             gap: String::new(),
             flush: false,
             through: 0,
+            overrides: BTreeMap::new(),
+            list_hover: None,
+            junctions: None,
         }
     }
 }
@@ -192,6 +208,8 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &[Sel
         let labels: Vec<&str> = BUTT_THROUGH.iter().map(|c| tr(c.1)).collect();
         choice_row(ui, "ui.frame_butt_through", "frame_butt_through", &mut m.through, &labels);
     }
+    refresh_junctions(app, m, inputs);
+    corner_list(ui, m);
     enter |= text_row(ui, "Name", &mut m.name, tr("from the profile")).0;
     enter
 }
@@ -488,29 +506,7 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
     if section.iter().any(|x| Some(x.0) != section_sketch) {
         return Err("the section's profiles must be in one sketch".into());
     }
-    // A line picked in the view comes with its sketch (line ids are a sketch's own); a line
-    // selected before the dialog opened is looked for in the newest sketch with it, not the
-    // section's.
-    let picks = crate::selection::items(inputs, 0);
-    let mut lines = Vec::new();
-    let mut known = None;
-    for pick in picks {
-        match pick {
-            Sel::ExternalSketchCurve { sketch, id } | Sel::SketchCurve { id, sketch: Some(sketch) } => {
-                if known.is_some_and(|k| k != *sketch) {
-                    return Err("the lines must be in one sketch".into());
-                }
-                known = Some(*sketch);
-                lines.push(id.clone());
-            }
-            Sel::SketchCurve { id, sketch: None } => lines.push(id.clone()),
-            _ => {}
-        }
-    }
-    if lines.is_empty() {
-        return Err("select the frame sketch's lines first".into());
-    }
-    let sketch = known.or_else(|| curves_sketch(app, &lines, section_sketch)).ok_or("the lines must be in one sketch, not the section's")?;
+    let (sketch, lines) = path(app, inputs, section_sketch)?;
     let mut p = json!({"sketch": sketch});
     if !m.all {
         p["lines"] = json!(lines);
@@ -542,12 +538,41 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
         p["mirror"] = json!(true);
     }
     p["corners"] = corners(m);
+    p["corner_overrides"] = json!(m.overrides);
     if let Value::Object(o) = &mut p {
         for (key, v) in extra {
             o.entry(key.clone()).or_insert_with(|| v.clone());
         }
     }
     Ok(vec![("frame.member".to_string(), p)])
+}
+
+/// The frame sketch and the lines picked in it.
+fn path(app: &SolveApp, inputs: &[SelInput], section_sketch: Option<u64>) -> Result<(u64, Vec<String>), String> {
+    // A line picked in the view comes with its sketch (line ids are a sketch's own); a line
+    // selected before the dialog opened is looked for in the newest sketch with it, not the
+    // section's.
+    let picks = crate::selection::items(inputs, 0);
+    let mut lines = Vec::new();
+    let mut known = None;
+    for pick in picks {
+        match pick {
+            Sel::ExternalSketchCurve { sketch, id } | Sel::SketchCurve { id, sketch: Some(sketch) } => {
+                if known.is_some_and(|k| k != *sketch) {
+                    return Err("the lines must be in one sketch".into());
+                }
+                known = Some(*sketch);
+                lines.push(id.clone());
+            }
+            Sel::SketchCurve { id, sketch: None } => lines.push(id.clone()),
+            _ => {}
+        }
+    }
+    if lines.is_empty() {
+        return Err("select the frame sketch's lines first".into());
+    }
+    let sketch = known.or_else(|| curves_sketch(app, &lines, section_sketch)).ok_or("the lines must be in one sketch, not the section's")?;
+    Ok((sketch, lines))
 }
 
 /// `frame.member`'s `corners` for the Corners rows.
@@ -570,7 +595,9 @@ fn corners(m: &Member) -> Value {
 
 /// The dialog editing a frame member feature, filled from it.
 pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelInput>, Map<String, Value>)> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, corners, .. } = kind else {
+    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, corners, corner_overrides, .. } =
+        kind
+    else {
         return None;
     };
     let (_, mut inputs) = start(app, "frame.member")?;
@@ -614,6 +641,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
     m.flush = !corners.butt_cut.is_square();
     let through = serde_json::to_value(corners.butt_through).ok();
     m.through = BUTT_THROUGH.iter().position(|c| through.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
+    m.overrides = corner_overrides.clone();
     // The dialog has no field for a located point: an edit keeps it, so the member stays where it
     // is attached.
     let mut extra = Map::new();
@@ -621,6 +649,195 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
         extra.insert("locate".into(), json!(at));
     }
     Some((Kind::Frame(m), inputs, extra))
+}
+
+/// The feature's corner settings as the Corners rows set them.
+fn corner_defaults(m: &Member) -> CornerDefaults {
+    let c = corners(m);
+    let doc = json!({
+        "within_group": c.get("treatment").cloned().unwrap_or(Value::Null),
+        "gap_within": c.get("gap").cloned().unwrap_or(Value::Null),
+        "butt_cut": c.get("butt_cut").cloned().unwrap_or(json!("square")),
+        "butt_through": c.get("butt_through").cloned().unwrap_or(json!("longer")),
+    });
+    serde_json::from_value(doc).unwrap_or_default()
+}
+
+/// Work out the junctions of the lines picked again when the path or the corner settings changed.
+pub fn refresh_junctions(app: &SolveApp, m: &mut Member, inputs: &[SelInput]) {
+    let section_sketch = crate::selection::items(inputs, 1).profiles().first().map(|x| x.0).or(m.whole);
+    let Ok((sketch, lines)) = path(app, inputs, section_sketch) else {
+        m.junctions = None;
+        return;
+    };
+    let lines = if m.all { Vec::new() } else { lines };
+    let defaults = corner_defaults(m);
+    let key = json!([sketch, lines, defaults, m.overrides]).to_string();
+    if m.junctions.as_ref().is_some_and(|(k, _)| *k == key) {
+        return;
+    }
+    let st = app.session.model.state();
+    let component = app.session.doc.feature(sketch).map_or(0, |f| f.component);
+    let found = frame::junctions_on(&app.session.doc, &st, sketch, &lines, &defaults, &m.overrides, component).unwrap_or_default();
+    m.junctions = Some((key, found));
+}
+
+/// How a junction's kind reads in the corner list.
+fn kind_label(kind: JunctionKind) -> &'static str {
+    match kind {
+        JunctionKind::L => "L",
+        JunctionKind::I => "I",
+        JunctionKind::T => "T",
+        JunctionKind::Multi => "Multi",
+    }
+}
+
+/// Junction `j`'s own setting, made by `change` and dropped again when it sets nothing.
+fn set_override(m: &mut Member, id: &str, change: impl FnOnce(&mut CornerOverride)) {
+    let o = m.overrides.entry(id.to_string()).or_default();
+    change(o);
+    if *o == CornerOverride::default() {
+        m.overrides.remove(id);
+    }
+}
+
+/// Run the next member at junction `j` through: the other one at an L, the next in turn where
+/// more meet.
+fn swap_through(m: &mut Member, j: &frame::JunctionReport) {
+    let mut lines: Vec<&str> = Vec::new();
+    for (line, _) in &j.ends {
+        if !lines.contains(&line.as_str()) {
+            lines.push(line);
+        }
+    }
+    let Some(now) = j.through.as_deref() else { return };
+    let Some(k) = lines.iter().position(|l| *l == now) else { return };
+    let Some(next) = lines.get((k + 1) % lines.len()).map(|l| l.to_string()) else { return };
+    set_override(m, &j.id, |o| o.through = Some(next));
+}
+
+/// Frame Member's corner list: each junction of the lines picked, its treatment and the member
+/// that runs through, each changeable for that junction alone (`corner_overrides`).
+fn corner_list(ui: &mut egui::Ui, m: &mut Member) {
+    m.list_hover = None;
+    let list = m.junctions.as_ref().map(|(_, j)| j.clone()).unwrap_or_default();
+    if list.is_empty() {
+        return;
+    }
+    let mut hover = None;
+    crate::ui_kit::section_count(ui, "frame_corner_list", "ui.frame_corner_list", false, Some(list.len()), |ui| {
+        crate::ui_kit::status_line(ui, solidcraft_ui_text::tr("ui.frame_corner_list.hint"), crate::ui_kit::StatusTone::Dim);
+        for j in &list {
+            let r = ui.scope(|ui| corner_row(ui, m, j)).response;
+            if r.contains_pointer() {
+                hover = Some(j.id.clone());
+            }
+        }
+    });
+    m.list_hover = hover;
+}
+
+fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
+    let mut options: Vec<(&str, Option<Treatment>)> = vec![("ui.frame_corner_default", None)];
+    if j.kind == JunctionKind::L {
+        options.push(("ui.frame_corner_mitre", Some(Treatment::Mitre)));
+    }
+    options.push(("ui.frame_corner_butt", Some(Treatment::Butt)));
+    options.push(("ui.frame_corner_none", Some(Treatment::None)));
+    let current = m.overrides.get(&j.id).and_then(|o| o.treatment);
+    let mut chosen = options.iter().position(|o| o.1 == current).unwrap_or(0);
+    let labels: Vec<&str> = options.iter().map(|o| tr(o.0)).collect();
+    let title = format!("{} · {}", j.id, kind_label(j.kind));
+    if choice_row(ui, &title, &format!("frame_corner_{}", j.id), &mut chosen, &labels).changed() {
+        let treatment = options.get(chosen).and_then(|o| o.1);
+        set_override(m, &j.id, |o| o.treatment = treatment);
+    }
+    let overridden = m.overrides.contains_key(&j.id);
+    if j.through.is_some() || overridden {
+        crate::ui_kit::row(ui, "", |ui| {
+            ui.horizontal(|ui| {
+                if let Some(line) = &j.through {
+                    ui.label(format!("{} {line}", tr("ui.frame_runs_through")));
+                    if crate::ui_kit::button(ui, tr("ui.frame_swap_through"), crate::ui_kit::Button::Small).clicked() {
+                        swap_through(m, j);
+                    }
+                }
+                if overridden && crate::ui_kit::button(ui, tr("ui.frame_corner_reset"), crate::ui_kit::Button::Small).clicked() {
+                    m.overrides.remove(&j.id);
+                }
+            });
+        });
+    }
+}
+
+/// Size (points) of a junction marker's click target in the view.
+const MARKER: f32 = 18.0;
+
+/// The junctions marked in the view while Frame Member's corners are on, with where each is drawn.
+fn markers<'a>(m: &'a Member, proj: &Proj) -> Vec<(&'a frame::JunctionReport, Pos2)> {
+    if CORNERS.get(m.corner).is_some_and(|c| c.0 == "none") {
+        return Vec::new();
+    }
+    let Some((_, list)) = &m.junctions else { return Vec::new() };
+    list.iter().filter_map(|j| proj.to_screen(Vec3::new(j.at[0], j.at[1], j.at[2])).map(|c| (j, c))).collect()
+}
+
+/// Whether point `p` is on a junction marker of the open Frame Member window, so a click there
+/// swaps the corner instead of picking in the model.
+pub(crate) fn marker_at(app: &SolveApp, proj: &Proj, p: Pos2) -> bool {
+    let Some(Kind::Frame(m)) = app.dialog.as_ref().map(|d| &d.kind) else { return false };
+    markers(m, proj).iter().any(|(_, c)| Rect::from_center_size(*c, vec2(MARKER, MARKER)).contains(p))
+}
+
+/// The junction markers in the view: a dot at each junction (filled where it has its own
+/// settings), a stroke along the member that runs through at a butt, and the junction's id when
+/// it or its row is under the pointer. A click on a butt's marker runs the other member through.
+pub fn overlay(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, d: &mut crate::dialogs::Dialog) {
+    let inputs = d.inputs.clone();
+    let Kind::Frame(m) = &mut d.kind else { return };
+    refresh_junctions(app, m, &inputs);
+    let t = solidcraft_theme::Tokens::get();
+    let reach = app.cam.half_height() * 0.05;
+    let mut clicked = None;
+    for (j, c) in markers(m, proj) {
+        let r = ui.interact(Rect::from_center_size(c, vec2(MARKER, MARKER)), ui.scope_id().with(("frame_corner_marker", &j.id)), Sense::click());
+        let hot = r.hovered() || m.list_hover.as_deref() == Some(j.id.as_str());
+        // The member that runs through: a short arrow along it from the corner, over the path.
+        if let Some(line) = &j.through
+            && let Some(k) = j.ends.iter().position(|(l, _)| l == line)
+            && let Some(u) = j.inward.get(k)
+            && let Some(tip) = proj.to_screen(Vec3::new(j.at[0], j.at[1], j.at[2]) + Vec3::new(u[0], u[1], u[2]) * reach)
+        {
+            let dir = (tip - c).normalized();
+            let end = c + dir * if hot { 56.0 } else { 40.0 };
+            let side = vec2(-dir.y, dir.x) * 6.0;
+            let stroke = Stroke::new(if hot { 4.0 } else { 3.0 }, t.manipulator);
+            painter.line_segment([c, end], stroke);
+            painter.line_segment([end, end - dir * 10.0 + side], stroke);
+            painter.line_segment([end, end - dir * 10.0 - side], stroke);
+        }
+        let fill = if m.overrides.contains_key(&j.id) { t.manipulator } else { t.panel };
+        painter.circle(c, if hot { 9.0 } else { 7.0 }, fill, Stroke::new(2.5, t.manipulator));
+        if hot {
+            let text = match &j.through {
+                Some(line) => format!("{} · {} {line}", j.id, tr("ui.frame_runs_through")),
+                None => format!("{} · {}", j.id, kind_label(j.kind)),
+            };
+            // On a panel of its own, readable over the members.
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(t.font_label), t.text);
+            let at = c + vec2(14.0, -14.0 - galley.size().y);
+            painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(4.0), 4.0, t.panel);
+            painter.galley(at, galley, t.text);
+        }
+        // On the press: a marker is a switch, not something to drag, and a press that the
+        // window is slow to see released still counts.
+        if j.through.is_some() && r.contains_pointer() && ui.input(|i| i.pointer.primary_pressed()) {
+            clicked = Some(j.clone());
+        }
+    }
+    if let Some(j) = clicked {
+        swap_through(m, &j);
+    }
 }
 
 #[cfg(test)]

@@ -161,7 +161,7 @@ impl MemberLine {
     }
 
     /// The unit direction from end `e` into the member.
-    fn inward(&self, e: End) -> Option<Vec3> {
+    pub fn inward(&self, e: End) -> Option<Vec3> {
         match e {
             End::Start => (self.b - self.a).normalized(),
             End::End => (self.a - self.b).normalized(),

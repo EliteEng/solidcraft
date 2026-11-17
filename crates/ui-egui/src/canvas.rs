@@ -369,6 +369,7 @@ pub(crate) fn owns_pointer(app: &SolveApp, proj: &Proj, p: Pos2) -> bool {
             .and_then(|r| proj.to_screen(r.point(r.angle)))
             .is_some_and(|end| egui::Rect::from_center_size(end, vec2(20.0, 20.0)).contains(p))
         || crate::place_gizmo::contains_pointer(app, p)
+        || crate::dialogs_frame::marker_at(app, proj, p)
         || app.dialog.as_ref().is_some_and(|d| matches!(&d.kind, Kind::Measure { labels, .. } if labels.contains(p)))
 }
 
@@ -384,6 +385,9 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
         crate::dialogs_assembly::overlay(app, painter, proj, &mut d);
         app.dialog = Some(d);
         return;
+    }
+    if matches!(d.kind, Kind::Frame(_)) {
+        crate::dialogs_frame::overlay(app, ui, painter, proj, &mut d);
     }
     if crate::dialogs_sheet::overlay(app, painter, proj.rect, &d) {
         app.dialog = Some(d);

@@ -206,6 +206,9 @@ pub struct JunctionReport {
     pub kind: frame_corner::JunctionKind,
     pub at: [f64; 3],
     pub ends: Vec<(String, frame_corner::End)>,
+    /// Each of `ends`' unit direction from the junction into its member.
+    #[serde(skip)]
+    pub inward: Vec<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span: Option<String>,
     pub treatment: frame_corner::Treatment,
@@ -223,9 +226,24 @@ pub fn feature_junctions(doc: &Document, st: &ModelState, f: &Feature) -> Result
     let FeatureKind::FrameMember { path_sketch, lines, corners, corner_overrides, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
-    let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch}")))?;
+    junctions_on(doc, st, path_sketch.0, lines, corners, corner_overrides, f.component)
+}
+
+/// The junctions frame members on `lines` of sketch `sketch` (none: all its lines) would have in
+/// component `component`'s coordinates, with what each gets from `corners` and `overrides`: what
+/// Frame Member's corner list shows before the feature is made.
+pub fn junctions_on(
+    doc: &Document,
+    st: &ModelState,
+    sketch: u64,
+    lines: &[String],
+    corners: &CornerDefaults,
+    overrides: &BTreeMap<String, CornerOverride>,
+    component: u64,
+) -> Result<Vec<JunctionReport>> {
+    let ps = st.sketch(sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
     let mapped =
-        if ps.sketch.wires.is_empty() { Cow::Owned(sketch_in_feature_frame(doc, ps, f.component)?) } else { path_in_frame(doc, ps, f.component)? };
+        if ps.sketch.wires.is_empty() { Cow::Owned(sketch_in_feature_frame(doc, ps, component)?) } else { path_in_frame(doc, ps, component)? };
     let segments = member_lines(mapped.as_ref(), lines)?;
     let (vals, _) = doc.param_values();
     let gap = |e: &Option<crate::Expr>| e.as_ref().and_then(|e| val(&vals, e, Kind::Length).ok()).filter(|g| *g >= 0.0);
@@ -234,13 +252,14 @@ pub fn feature_junctions(doc: &Document, st: &ModelState, f: &Feature) -> Result
     Ok(junctions_of(&segments)
         .into_iter()
         .map(|j| {
-            let over = corner_overrides.get(&j.id);
+            let over = overrides.get(&j.id);
             let set = frame_corner::settings(&j, corners, gap_within, over.map(|o| (o, gap(&o.gap))), &segments);
             JunctionReport {
                 id: j.id.clone(),
                 kind: j.kind,
                 at: [j.at.x, j.at.y, j.at.z],
                 ends: j.ends.iter().map(|(i, e)| (line_id(*i), *e)).collect(),
+                inward: j.ends.iter().map(|(i, e)| segments.get(*i).and_then(|l| l.inward(*e)).map_or([0.0; 3], |u| [u.x, u.y, u.z])).collect(),
                 span: j.span.map(line_id),
                 treatment: set.treatment,
                 gap: set.gap,
