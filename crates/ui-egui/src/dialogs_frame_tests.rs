@@ -863,3 +863,29 @@ fn a_click_on_a_corner_marker_swaps_the_member_that_runs_through() {
     let now = m.overrides.get(&j.id).and_then(|o| o.through.clone());
     assert!(now.is_some() && now.as_deref() != Some(before.as_str()), "{:?}", m.overrides);
 }
+
+/// The corner list names lines after their members: an edited feature's names, a new feature's
+/// after Name, else the line.
+#[test]
+fn the_corner_list_names_lines_after_their_members() {
+    let mut app = frame_app();
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines);
+    let inputs = d.inputs.clone();
+    let m = member(&mut d);
+    refresh_junctions(&app, m, &inputs);
+    assert_eq!(line_label(m, &lines[0]), format!("line {}", lines[0]));
+    m.name = "Rail".into();
+    refresh_junctions(&app, m, &inputs);
+    let named: Vec<String> = lines.iter().map(|l| line_label(m, l)).collect();
+    assert_eq!(named, ["Rail", "Rail (2)", "Rail (3)", "Rail (4)"]);
+    let c = apply_commands(&app, &d).unwrap();
+    run_all(&mut app, c);
+    let f = app.session.doc.features.last().unwrap().id;
+    app.run("body.rename", json!({"body": "Rail (3)", "name": "Top"})).unwrap();
+    let mut e = edit_dialog(&app, f, None).unwrap();
+    let inputs = e.inputs.clone();
+    let m = member(&mut e);
+    refresh_junctions(&app, m, &inputs);
+    assert_eq!(line_label(m, &lines[2]), "Top", "{:?}", m.line_names);
+}

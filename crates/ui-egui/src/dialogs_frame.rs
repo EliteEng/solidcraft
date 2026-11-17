@@ -83,6 +83,10 @@ pub struct Member {
     /// The junctions the corner list and the view show, with the path and settings they were
     /// found for (worked out again only when those change).
     pub junctions: Option<(String, Vec<frame::JunctionReport>)>,
+    /// Each member's body name by its line id, as the feature being edited pinned them.
+    pub pinned: BTreeMap<String, String>,
+    /// What the corner list and the view call each line: its member's name where known.
+    pub line_names: BTreeMap<String, String>,
 }
 
 /// The Corners choices, as `frame.member`'s `corners.treatment` spells them, with their labels.
@@ -125,6 +129,8 @@ impl Member {
             overrides: BTreeMap::new(),
             list_hover: None,
             junctions: None,
+            pinned: BTreeMap::new(),
+            line_names: BTreeMap::new(),
         }
     }
 }
@@ -595,8 +601,21 @@ fn corners(m: &Member) -> Value {
 
 /// The dialog editing a frame member feature, filled from it.
 pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelInput>, Map<String, Value>)> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, corners, corner_overrides, .. } =
-        kind
+    let FeatureKind::FrameMember {
+        path_sketch,
+        lines,
+        profile,
+        anchor,
+        locate,
+        point,
+        angle,
+        mirror,
+        body_name,
+        names,
+        corners,
+        corner_overrides,
+        ..
+    } = kind
     else {
         return None;
     };
@@ -642,6 +661,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
     let through = serde_json::to_value(corners.butt_through).ok();
     m.through = BUTT_THROUGH.iter().position(|c| through.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
     m.overrides = corner_overrides.clone();
+    m.pinned = names.clone();
     // The dialog has no field for a located point: an edit keeps it, so the member stays where it
     // is attached.
     let mut extra = Map::new();
@@ -672,7 +692,7 @@ pub fn refresh_junctions(app: &SolveApp, m: &mut Member, inputs: &[SelInput]) {
     };
     let lines = if m.all { Vec::new() } else { lines };
     let defaults = corner_defaults(m);
-    let key = json!([sketch, lines, defaults, m.overrides]).to_string();
+    let key = json!([sketch, lines, defaults, m.overrides, m.name.trim()]).to_string();
     if m.junctions.as_ref().is_some_and(|(k, _)| *k == key) {
         return;
     }
@@ -680,6 +700,24 @@ pub fn refresh_junctions(app: &SolveApp, m: &mut Member, inputs: &[SelInput]) {
     let component = app.session.doc.feature(sketch).map_or(0, |f| f.component);
     let found = frame::junctions_on(&app.session.doc, &st, sketch, &lines, &defaults, &m.overrides, component).unwrap_or_default();
     m.junctions = Some((key, found));
+    // Members are named as the feature names them: an edited feature's pinned names; a new one's
+    // after Name (without one, after the profile, which the list doesn't know yet).
+    m.line_names = if !m.pinned.is_empty() {
+        m.pinned.clone()
+    } else if !m.name.trim().is_empty() {
+        let ids = frame::line_ids_on(&st, sketch, &lines).unwrap_or_default();
+        ids.iter().cloned().zip(frame::member_names(&st, &ids, &BTreeMap::new(), m.name.trim())).collect()
+    } else {
+        BTreeMap::new()
+    };
+}
+
+/// What the corner list and the view call line `id`: its member's name, else the line.
+fn line_label(m: &Member, id: &str) -> String {
+    match m.line_names.get(id) {
+        Some(name) => name.clone(),
+        None => format!("{} {id}", tr("ui.frame_line")),
+    }
 }
 
 /// How a junction's kind reads in the corner list.
@@ -757,7 +795,7 @@ fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
         crate::ui_kit::row(ui, "", |ui| {
             ui.horizontal(|ui| {
                 if let Some(line) = &j.through {
-                    ui.label(format!("{} {line}", tr("ui.frame_runs_through")));
+                    ui.label(format!("{} {}", tr("ui.frame_runs_through"), line_label(m, line)));
                     if crate::ui_kit::button(ui, tr("ui.frame_swap_through"), crate::ui_kit::Button::Small).clicked() {
                         swap_through(m, j);
                     }
@@ -820,7 +858,7 @@ pub fn overlay(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj:
         painter.circle(c, if hot { 9.0 } else { 7.0 }, fill, Stroke::new(2.5, t.manipulator));
         if hot {
             let text = match &j.through {
-                Some(line) => format!("{} · {} {line}", j.id, tr("ui.frame_runs_through")),
+                Some(line) => format!("{} · {} {}", j.id, tr("ui.frame_runs_through"), line_label(m, line)),
                 None => format!("{} · {}", j.id, kind_label(j.kind)),
             };
             // On a panel of its own, readable over the members.

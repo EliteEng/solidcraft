@@ -349,7 +349,7 @@ impl crate::walk::Walk for ProfileSpec {
 }
 
 pub use crate::eval::frame_member::{
-    JunctionReport, feature_junctions, junctions_on, member_line_ids, member_names, member_turns, sketch_point, sketch_section,
+    JunctionReport, feature_junctions, junctions_on, line_ids_on, member_line_ids, member_names, member_turns, sketch_point, sketch_section,
 };
 
 /// Where a frame member's cross-section comes from.

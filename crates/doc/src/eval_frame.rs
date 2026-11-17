@@ -369,6 +369,13 @@ pub(super) fn check_turn(doc: &Document, vals: &BTreeMap<String, Value>, f: &Fea
     turn_angle(vals, angle).map(|_| ())
 }
 
+/// The ids of the lines of sketch `sketch` members would be made on (`lines`, or none: every
+/// straight line), in the order they are made.
+pub fn line_ids_on(st: &ModelState, sketch: u64, lines: &[String]) -> Result<Vec<String>> {
+    let ps = st.sketch(sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
+    Ok(member_lines(ps, lines)?.into_iter().map(|l| l.id).collect())
+}
+
 /// The ids of a `FrameMember` feature's lines in `st`, in the order its members are made.
 pub fn member_line_ids(st: &ModelState, kind: &FeatureKind) -> Result<Vec<String>> {
     let FeatureKind::FrameMember { path_sketch, lines, .. } = kind else {
