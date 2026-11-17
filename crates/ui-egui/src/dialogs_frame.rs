@@ -756,7 +756,11 @@ fn load_group(st: &solidcraft_engine::doc::ModelState, m: &mut Member, section: 
 /// The Group row: which group the rows edit, New group and Remove group.
 fn group_rows(ui: &mut egui::Ui, m: &mut Member, inputs: &mut [SelInput]) {
     let count = m.slots.len().max(1);
-    let mut labels: Vec<String> = (1..=count).map(|n| format!("{} {n}", tr("ui.frame_member_group"))).collect();
+    // Each group by number and name (`1 · Rail`); the shown group's name as typed now.
+    let name =
+        |k: usize| if k == m.group { m.name.trim().to_string() } else { m.slots.get(k).map(|g| g.m.name.trim().to_string()).unwrap_or_default() };
+    let mut labels: Vec<String> =
+        (0..count).map(|k| if name(k).is_empty() { (k + 1).to_string() } else { format!("{} · {}", k + 1, name(k)) }).collect();
     if count < frame::MAX_GROUPS {
         labels.push(tr("ui.frame_new_group").to_string());
     }

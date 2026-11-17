@@ -59,7 +59,8 @@ fn number(v: &Value) -> f64 {
 
 /// An item's cells after the item number, as the grid shows them.
 fn cells(app: &SolveApp, item: &Value) -> [String; 7] {
-    let length = |v: &Value| crate::canvas::format_len(&app.session.doc, number(v));
+    // To a hundredth of a millimetre, in the design's units.
+    let length = |v: &Value| crate::canvas::format_len_drag(&app.session.doc, number(v), 0.01, 2);
     let angle = |v: &Value| format!("{:.1}°", number(v));
     let mass = item["mass_each_g"].as_f64().map_or_else(String::new, |g| format!("{:.3} kg", g / 1000.0));
     [
@@ -90,7 +91,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 s["description"].as_str().unwrap_or_default(),
                 s["pieces"],
                 solidcraft_ui_text::tr("ui.cut_list_pieces"),
-                crate::canvas::format_len(&app.session.doc, number(&s["total_length"]))
+                crate::canvas::format_len_drag(&app.session.doc, number(&s["total_length"]), 0.01, 2)
             )
         })
         .collect();
@@ -101,23 +102,59 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if items.is_empty() {
                 ui.label(RichText::new(solidcraft_ui_text::tr("ui.cut_list_empty")).color(t.text_dim));
             }
-            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                egui::Grid::new("sc_cut_list_grid").num_columns(HEADERS.len()).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
-                    for h in HEADERS {
-                        ui.label(RichText::new(solidcraft_ui_text::tr_label(h)).strong().color(t.text_dim));
+            egui::ScrollArea::both().max_height(360.0).show(ui, |ui| {
+                // Each column as wide as its widest text, worked out before drawing, in rows of
+                // fixed-width cells: every cell shows its whole text.
+                let font = egui::TextStyle::Body.resolve(ui.style());
+                let width = |s: &str| ui.painter().layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x.ceil();
+                let mut widths: Vec<f32> = HEADERS.iter().map(|h| width(solidcraft_ui_text::tr_label(h))).collect();
+                let padding = 2.0 * ui.spacing().button_padding.x;
+                for (item, row) in items.iter().zip(&rows) {
+                    if let Some(w) = widths.get_mut(0) {
+                        *w = w.max(width(&item["item"].to_string()) + padding);
                     }
-                    ui.end_row();
-                    for (i, (item, row)) in items.iter().zip(&rows).enumerate() {
-                        let picked = d.picked == Some(i);
-                        if crate::ui_kit::list_picker(ui, &format!("cut_list_{i}"), &item["item"].to_string(), picked).clicked() {
-                            pick = Some(if picked { None } else { Some(i) });
+                    for (k, c) in row.iter().enumerate() {
+                        if let Some(w) = widths.get_mut(k + 1) {
+                            *w = w.max(width(c));
                         }
-                        for c in row {
-                            ui.label(c);
-                        }
-                        ui.end_row();
+                    }
+                }
+                let cell = |ui: &mut egui::Ui, w: f32, add: &mut dyn FnMut(&mut egui::Ui) -> egui::Response| {
+                    ui.allocate_ui_with_layout(egui::vec2(w, crate::ui_kit::row_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_min_width(w);
+                        add(ui)
+                    })
+                    .inner
+                };
+                let spacing = 14.0;
+                let total: f32 = widths.iter().sum::<f32>() + spacing * widths.len().saturating_sub(1) as f32;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = spacing;
+                    for (h, w) in HEADERS.iter().zip(&widths) {
+                        cell(ui, *w, &mut |ui| {
+                            ui.add(egui::Label::new(RichText::new(solidcraft_ui_text::tr_label(h)).strong().color(t.text_dim)).extend())
+                        });
                     }
                 });
+                for (i, (item, row)) in items.iter().zip(&rows).enumerate() {
+                    let picked = d.picked == Some(i);
+                    if i % 2 == 0 {
+                        let top = ui.cursor().min;
+                        ui.painter().rect_filled(egui::Rect::from_min_size(top, egui::vec2(total, crate::ui_kit::row_height())), 2.0, t.hover);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = spacing;
+                        let first = widths.first().copied().unwrap_or(0.0);
+                        if cell(ui, first, &mut |ui| crate::ui_kit::list_picker(ui, &format!("cut_list_{i}"), &item["item"].to_string(), picked))
+                            .clicked()
+                        {
+                            pick = Some(if picked { None } else { Some(i) });
+                        }
+                        for (k, c) in row.iter().enumerate() {
+                            cell(ui, widths.get(k + 1).copied().unwrap_or(0.0), &mut |ui| ui.add(egui::Label::new(c.as_str()).extend()));
+                        }
+                    });
+                }
             });
             ui.separator();
             for line in &stock {
