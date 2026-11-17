@@ -889,3 +889,46 @@ fn the_corner_list_names_lines_after_their_members() {
     refresh_junctions(&app, m, &inputs);
     assert_eq!(line_label(m, &lines[2]), "Top", "{:?}", m.line_names);
 }
+
+/// New group starts a group with no lines; its lines and profile are its own, the first group's
+/// stay as they were, both reach `frame.member` (`groups`), and Edit Feature brings them back.
+#[test]
+fn groups_have_their_own_lines_and_profile_and_come_back_when_editing() {
+    let mut app = frame_app();
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines[..2]);
+    let inputs = &mut d.inputs;
+    let Kind::Frame(m) = &mut d.kind else { panic!() };
+    new_group(m, inputs);
+    assert_eq!((m.group, m.slots.len()), (1, 2));
+    assert!(inputs[0].items.is_empty(), "a new group has no lines yet");
+    inputs[0].items = lines[2..].iter().map(|id| Sel::SketchCurve { id: id.clone(), sketch: None }).collect();
+    m.dims[m.kind][0] = "60 mm".into();
+    m.name = "Post".into();
+    switch_group(m, inputs, 0);
+    assert_eq!(inputs[0].items.len(), 2, "the first group's lines are back");
+    assert_eq!(m.dims[m.kind][0], "40 mm");
+    let c = apply_commands(&app, &d).unwrap();
+    let p = &c[0].1;
+    assert_eq!(p["lines"], json!(lines[..2]));
+    assert_eq!(p["groups"][0]["lines"], json!(lines[2..]), "{p}");
+    assert_eq!(
+        (p["groups"][0]["id"].as_str(), p["groups"][0]["body_name"].as_str(), p["groups"][0]["profile"]["width"].as_str()),
+        (Some("g2"), Some("Post"), Some("60 mm"))
+    );
+    assert_eq!(p["corners"]["between_groups"], "butt");
+    run_all(&mut app, c);
+    assert!(body_names(&app).iter().any(|n| n == "Post (2)"), "{:?}", body_names(&app));
+    let f = app.session.doc.features.last().unwrap().id;
+    let mut e = edit_dialog(&app, f, None).unwrap();
+    let inputs = &mut e.inputs;
+    let Kind::Frame(m) = &mut e.kind else { panic!() };
+    assert_eq!(m.slots.len(), 2);
+    switch_group(m, inputs, 1);
+    assert_eq!((m.name.as_str(), m.dims[m.kind][0].as_str(), inputs[0].items.len()), ("Post", "60 mm", 2));
+    // Remove group puts its lines back with the first group (All Lines off: they go).
+    remove_group(m, inputs);
+    assert!(m.slots.is_empty() && m.group == 0);
+    let c = apply_commands(&app, &e).unwrap();
+    assert_eq!(c[0].1["params"]["groups"], json!([]), "{c:?}");
+}

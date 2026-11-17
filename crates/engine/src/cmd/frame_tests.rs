@@ -1870,3 +1870,84 @@ fn a_frame_on_the_front_plane_has_its_posts_facing_like_its_rails() {
     );
     assert_eq!(depths(&mut s), old, "an edit keeps them");
 }
+
+/// Each body's extent in x and y, by name.
+fn extents(s: &mut Session) -> std::collections::BTreeMap<String, [(f64, f64); 2]> {
+    let r = run(s, "inspect.measure", json!({}));
+    r["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            let axis = |k: usize| (f(&b["bbox"]["min"][k]), f(&b["bbox"]["max"][k]));
+            (b["name"].as_str().unwrap().to_string(), [axis(0), axis(1)])
+        })
+        .collect()
+}
+
+#[test]
+fn groups_have_their_own_profile_and_butt_where_they_meet() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines = rectangle_lines(&s);
+    let (long, short): (Vec<String>, Vec<String>) = (
+        lines.iter().filter(|(_, axis)| *axis == 0).map(|(id, _)| id.clone()).collect(),
+        lines.iter().filter(|(_, axis)| *axis == 1).map(|(id, _)| id.clone()).collect(),
+    );
+    let post = json!({"kind": "rect_tube", "width": 60, "height": 30, "wall": 3});
+    let params = json!({"sketch": "Frame", "lines": long, "profile": tube(), "body_name": "Rail",
+        "groups": [{"lines": short, "profile": post, "body_name": "Post"}]});
+    let r = run(&mut s, "frame.member", params.clone());
+    let fid = r["feature"].clone();
+    assert_eq!(r["bodies"], json!(["Rail", "Rail (2)", "Post", "Post (2)"]), "{r}");
+    // Group 1 (the rails) runs through to the posts' far faces (60 wide across x); the posts stop
+    // at the rails' faces (40 deep across y).
+    let near2 = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
+    let e = extents(&mut s);
+    assert!(near2(e["Rail"][0], (-30.0, 630.0)), "{e:?}");
+    assert!(near2(e["Post"][1], (20.0, 380.0)), "{e:?}");
+    assert!(near2(e["Post"][0], (570.0, 630.0)) || near2(e["Post"][0], (-30.0, 30.0)), "60 wide: {e:?}");
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid.clone()}));
+    assert!(j["junctions"].as_array().unwrap().iter().all(|x| x["between"] == true && x["treatment"] == "butt"), "{j}");
+    // The later group runs through instead, with a gap between groups.
+    let mut later = params.clone();
+    later["corners"] = json!({"group_through": "later", "gap_between": 2});
+    run(&mut s, "timeline.redefine", json!({"feature": fid.clone(), "command": "frame.member", "params": later}));
+    let e = extents(&mut s);
+    assert!(near2(e["Post"][1], (-20.0, 420.0)) && near2(e["Rail"][0], (32.0, 568.0)), "{e:?}");
+    // An edit that doesn't give the groups keeps them, and so does reopening.
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": fid.clone(), "command": "frame.member", "params": {"sketch": "Frame", "lines": long, "profile": tube(), "body_name": "Rail", "corners": {"group_through": "later", "gap_between": 2}}}),
+    );
+    assert_eq!(extents(&mut s), e);
+    let mut reopened = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+    assert_eq!(extents(&mut reopened), e);
+    // Without `lines`, the first group takes every line no other group has.
+    let mut rest = params.clone();
+    rest.as_object_mut().unwrap().remove("lines");
+    run(&mut s, "timeline.redefine", json!({"feature": fid, "command": "frame.member", "params": rest}));
+    assert_eq!(extents(&mut s).len(), 4);
+}
+
+#[test]
+fn bad_groups_are_refused_with_the_reason() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines: Vec<String> = rectangle_lines(&s).into_iter().map(|(id, _)| id).collect();
+    let try_ = |s: &mut Session, groups: Value| {
+        s.execute("frame.member", &json!({"sketch": "Frame", "lines": [lines[0]], "profile": tube(), "groups": groups})).unwrap_err().to_string()
+    };
+    let e = try_(&mut s, json!([{"lines": [lines[0]], "profile": tube()}]));
+    assert!(e.contains(&format!("line `{}`", lines[0])) && e.contains("group 1 and group 2"), "{e}");
+    let e = try_(&mut s, json!([{"lines": [lines[1]], "profile": tube()}, {"lines": [lines[1]], "profile": tube()}]));
+    assert!(e.contains("group 2 and group 3"), "{e}");
+    let e = try_(&mut s, json!([{"lines": [lines[1]]}]));
+    assert!(e.contains("group 2"), "{e}");
+    let e = try_(&mut s, json!([{"lines": [], "profile": tube()}]));
+    assert!(e.contains("group 2") && e.contains("lines"), "{e}");
+    let e = try_(&mut s, json!([{"id": "a", "lines": [lines[1]], "profile": tube()}, {"id": "a", "lines": [lines[2]], "profile": tube()}]));
+    assert!(e.contains("`a`"), "{e}");
+    assert!(s.doc.features.iter().all(|f| !matches!(f.kind, solidcraft_doc::FeatureKind::FrameMember { .. })), "nothing was made");
+}

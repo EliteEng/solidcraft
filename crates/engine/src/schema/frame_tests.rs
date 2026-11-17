@@ -48,6 +48,7 @@ fn schemas_and_the_key_check_agree() {
             "corner_overrides",
             "corners",
             "exact_regions",
+            "groups",
             "library",
             "lines",
             "locate",

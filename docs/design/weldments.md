@@ -475,8 +475,12 @@ adds its one pending format file.
    mitres into four members with exact 45° faces and the given gap; butts with the through member
    covering the corner; a T butts; a 3D corner mitres; an override survives edits and reopening;
    old designs rebuild unchanged.
-3b. **Groups.** `groups` with their own profile and placement, `between_groups`, `gap_between`
-   and `through`, and junctions between groups.
+3b. **Groups** (built on branch `frame-profile-library`). The feature's own fields are its first
+   group and `groups` holds the rest (`MemberGroup`: id, name, lines, profile, anchor, point,
+   angle, mirror; `align` is later), so old designs need no `step`. `CornerDefaults` gains
+   `between_groups` (butt for new features), `gap_between` and `group_through`
+   (earlier | later; named `through` above). `frame.member` takes `groups`; there is no separate
+   `frame.members`. The window's Member group row edits one group at a time.
 4. **Dialog.** Library pickers, placement point dots, groups list, junction markers and the
    corner panel (`corner_overrides`). Screenshots in the PR, as AGENTS.md requires.
 5. **Cope**, and multi-member junction ranking.

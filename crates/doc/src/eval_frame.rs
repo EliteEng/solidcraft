@@ -27,23 +27,24 @@ const STRAIGHT_TOL: f64 = 1e-3;
 /// Evaluate a `FrameMember` feature: one new body per line, each named
 /// ([`member_names`], or by position for a copy whose `body_names` were set).
 pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &mut ModelState, warning: &mut Option<String>) -> Result<()> {
-    let FeatureKind::FrameMember { body_name, names, corners, corner_overrides, .. } = &f.kind else {
+    let FeatureKind::FrameMember { names, corners, corner_overrides, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
-    let Layout { segments, regions, description, at, turn, turns, centre, normal } = layout(doc, vals, f, st)?;
+    let Layout { segments, group_of, sections, turns, normal } = layout(doc, vals, f, st)?;
     let mut placed = Vec::with_capacity(segments.len());
-    for l in &segments {
-        let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(&l.id).copied(), normal)
+    for (l, g) in segments.iter().zip(&group_of) {
+        let (regions, at, turn, _, centre) = sections.get(*g).ok_or_else(|| DocError::Invalid(format!("line `{}`: no group {g}", l.id)))?;
+        let plane = member_plane(l.a, l.b, *turn, *at, *centre, turns.get(&l.id).copied(), normal)
             .ok_or_else(|| DocError::Invalid(format!("line `{}`: no plane square to it", l.id)))?;
-        placed.push(placed_on(l, &plane, &regions));
+        placed.push(placed_on(l, &plane, regions));
     }
-    let cuts = corner_cuts(vals, &segments, &placed, corners, corner_overrides, warning)?;
+    let cuts = corner_cuts(vals, &segments, &group_of, &placed, corners, corner_overrides, warning)?;
     let mut made = Vec::with_capacity(segments.len());
     for ((l, p), c) in segments.iter().zip(&placed).zip(cuts) {
         let id = &l.id;
         let plane = Plane::new(l.a - p.x * p.at.x - p.y * p.at.y, p.x, p.y)
             .ok_or_else(|| DocError::Invalid(format!("line `{id}`: no plane square to it")))?;
-        let mut bodies = kernel::extrude(&plane, &regions, -c.ext[0], l.a.dist(l.b) + c.ext[1])?;
+        let mut bodies = kernel::extrude(&plane, p.regions, -c.ext[0], l.a.dist(l.b) + c.ext[1])?;
         let mut body = match (bodies.pop(), bodies.is_empty()) {
             (Some(body), true) => body,
             _ => return Err(DocError::Invalid(format!("the member on line `{id}` is not one solid"))),
@@ -68,52 +69,68 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
         }
         return Ok(());
     }
-    let base = body_name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map_or(description, str::to_string);
+    // Named per group, after its name or profile; a pinned name holds across groups.
     let ids: Vec<String> = segments.into_iter().map(|l| l.id).collect();
-    for (name, t) in member_names(st, &ids, names, &base).into_iter().zip(made) {
+    let bases: Vec<&str> = sections.iter().map(|(_, _, _, base, _)| base.as_str()).collect();
+    let taken = grouped_member_names(st, &ids, &group_of, &bases, names);
+    for (name, t) in taken.into_iter().zip(made) {
         st.bodies.push(ModelBody::traced_new(name, t, f.id));
     }
     Ok(())
 }
 
-/// A member feature's lines (in its component frame), profile regions, default name, the
-/// profile point that sits on the lines, the profile's turn about them, each line's further turn
-/// (radians) from the Rotate steps after the feature ([`member_turns`]: a step whose angle fails
-/// is passed over) and the profile point those turn about (the centre of its bounding box).
+/// A member feature's lines (in its component frame), the group of each, each group's section as
+/// placed (regions, the point on the line, its turn about the line, what its members are named
+/// after, and the profile point a Rotate step turns it about: the centre of its bounding box), each
+/// line's further turn (radians) from the Rotate steps after the feature ([`member_turns`]: a step
+/// whose angle fails is passed over), and a flat frame sketch's normal, which sets which way its
+/// posts face (none for a 3D sketch or with `posts_world_x`).
 struct Layout {
     segments: Vec<MemberLine>,
-    regions: Vec<Region2>,
-    description: String,
-    at: Vec2,
-    turn: f64,
+    group_of: Vec<usize>,
+    sections: Vec<(Vec<Region2>, Vec2, f64, String, Vec2)>,
     turns: BTreeMap<String, f64>,
-    centre: Vec2,
-    /// A flat frame sketch's normal, which sets which way its posts face; none for a 3D sketch or
-    /// with `posts_world_x`.
     normal: Option<Vec3>,
 }
 
 fn layout(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState) -> Result<Layout> {
-    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, posts_world_x, .. } = &f.kind else {
+    let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, posts_world_x, groups, .. } =
+        &f.kind
+    else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
     let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch} (it must come earlier in the timeline)")))?;
     // The frame sketch in this feature's component frame: its plane, and its 3D lines.
     let mapped =
         if ps.sketch.wires.is_empty() { Cow::Owned(sketch_in_feature_frame(doc, ps, f.component)?) } else { path_in_frame(doc, ps, f.component)? };
-    let segments = member_lines(mapped.as_ref(), lines)?;
-    let section = profile_regions(doc, vals, st, profile)?;
-    let description = section.description.clone();
-    let (regions, at) = placed_section(section, *anchor, point.as_deref(), *locate, *mirror)?;
-    let turn = match angle {
-        Some(e) => val(vals, e, Kind::Angle)?,
-        None => 0.0,
+    let (segments, group_of) = grouped_lines(mapped.as_ref(), lines, groups)?;
+    // Each group's section as placed, its angle and what its members are named after.
+    let own = GroupSpec {
+        name: body_name.as_deref(),
+        profile,
+        anchor: *anchor,
+        point: point.as_deref(),
+        locate: *locate,
+        angle: angle.as_ref(),
+        mirror: *mirror,
     };
+    let mut sections = Vec::with_capacity(groups.len() + 1);
+    for (k, g) in std::iter::once(own).chain(groups.iter().map(GroupSpec::of)).enumerate() {
+        let label = |e: DocError| if k == 0 { e } else { DocError::Invalid(format!("group {}: {e}", k + 1)) };
+        let section = profile_regions(doc, vals, st, g.profile).map_err(label)?;
+        let base = g.name.map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| section.description.clone(), str::to_string);
+        let (regions, at) = placed_section(section, g.anchor, g.point, g.locate, g.mirror).map_err(label)?;
+        let turn = match g.angle {
+            Some(e) => val(vals, e, Kind::Angle).map_err(label)?,
+            None => 0.0,
+        };
+        let centre = frame::anchor_point(&regions, frame::Anchor::Center);
+        sections.push((regions, at, turn, base, centre));
+    }
     let turns = member_turns(doc, vals, FeatureId(f.id)).into_iter().map(|(line, (_, a))| (line, a)).collect();
-    let centre = frame::anchor_point(&regions, frame::Anchor::Center);
     // A flat sketch's normal sets which way its posts face; a 3D sketch has none.
     let normal = (ps.sketch.wires.is_empty() && !*posts_world_x).then(|| mapped.plane.x.cross(mapped.plane.y));
-    Ok(Layout { segments, regions, description, at, turn, turns, centre, normal })
+    Ok(Layout { segments, group_of, sections, turns, normal })
 }
 
 /// The plane a member's profile is laid in at `a`, square to the line on to `b`: profile point
@@ -145,18 +162,96 @@ pub(crate) fn member_section(
     st: &ModelState,
     line: &str,
 ) -> Result<(Plane, f64, Region2)> {
-    let Layout { segments, regions, at, turn, turns, centre, normal, .. } = layout(doc, vals, f, st)?;
-    let l = segments.iter().find(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let plane = member_plane(l.a, l.b, turn, at, centre, turns.get(line).copied(), normal)
+    let Layout { segments, group_of, sections, turns, normal } = layout(doc, vals, f, st)?;
+    let k = segments.iter().position(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
+    let (l, g) = (&segments[k], group_of.get(k).copied().unwrap_or(0));
+    let (regions, at, turn, _, centre) = sections.get(g).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no group {g}")))?;
+    let plane = member_plane(l.a, l.b, *turn, *at, *centre, turns.get(line).copied(), normal)
         .ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
-    let region = regions.into_iter().next().ok_or_else(|| DocError::Invalid("the member profile has no area".into()))?;
+    let region = regions.first().cloned().ok_or_else(|| DocError::Invalid("the member profile has no area".into()))?;
     Ok((plane, l.a.dist(l.b), region))
+}
+
+/// A group's member settings: the feature's own fields or a `MemberGroup`'s.
+struct GroupSpec<'a> {
+    name: Option<&'a str>,
+    profile: &'a MemberProfile,
+    anchor: frame::Anchor,
+    point: Option<&'a str>,
+    /// Only the feature's own group: groups have no `locate`.
+    locate: Option<[f64; 2]>,
+    angle: Option<&'a crate::Expr>,
+    mirror: bool,
+}
+
+impl<'a> GroupSpec<'a> {
+    fn of(g: &'a frame::MemberGroup) -> GroupSpec<'a> {
+        GroupSpec {
+            name: g.name.as_deref(),
+            profile: &g.profile,
+            anchor: g.anchor,
+            point: g.point.as_deref(),
+            locate: None,
+            angle: g.angle.as_ref(),
+            mirror: g.mirror,
+        }
+    }
+}
+
+/// The member lines of a feature's groups and the group of each (0: the feature's own fields,
+/// whose empty `lines` takes every line no other group has). A line in two groups, a group with
+/// no lines and too many groups or members are refused.
+pub(super) fn grouped_lines(ss: &SolvedSketch, lines: &[String], groups: &[frame::MemberGroup]) -> Result<(Vec<MemberLine>, Vec<usize>)> {
+    if groups.is_empty() {
+        let out = member_lines(ss, lines)?;
+        let n = out.len();
+        return Ok((out, vec![0; n]));
+    }
+    if groups.len() + 1 > frame::MAX_GROUPS {
+        return Err(DocError::Invalid(format!("at most {} groups in one feature", frame::MAX_GROUPS)));
+    }
+    let mut owner: BTreeMap<&str, usize> = BTreeMap::new();
+    for (k, g) in groups.iter().enumerate() {
+        if g.lines.is_empty() {
+            return Err(DocError::Invalid(format!("group {} (`{}`) has no lines", k + 2, g.id)));
+        }
+        for id in &g.lines {
+            if let Some(other) = owner.insert(id.as_str(), k + 1) {
+                return Err(DocError::Invalid(format!("line `{id}` is in group {} and group {}", other + 1, k + 2)));
+            }
+        }
+    }
+    for id in lines {
+        if let Some(other) = owner.get(id.as_str()) {
+            return Err(DocError::Invalid(format!("line `{id}` is in group 1 and group {}", other + 1)));
+        }
+    }
+    let mut out = Vec::new();
+    let mut group_of = Vec::new();
+    let first: Vec<MemberLine> = if lines.is_empty() {
+        let all = member_lines(ss, &[])?;
+        all.into_iter().filter(|l| !owner.contains_key(l.id.as_str())).collect()
+    } else {
+        member_lines(ss, lines)?
+    };
+    group_of.extend(std::iter::repeat_n(0, first.len()));
+    out.extend(first);
+    for (k, g) in groups.iter().enumerate() {
+        let these = member_lines(ss, &g.lines).map_err(|e| DocError::Invalid(format!("group {}: {e}", k + 2)))?;
+        group_of.extend(std::iter::repeat_n(k + 1, these.len()));
+        out.extend(these);
+    }
+    if out.len() > MAX_MEMBERS {
+        return Err(DocError::Invalid(format!("at most {MAX_MEMBERS} members in one feature")));
+    }
+    Ok((out, group_of))
 }
 
 /// Each member's corner cuts: none when the feature has no corner settings.
 fn corner_cuts(
     vals: &BTreeMap<String, Value>,
     lines: &[MemberLine],
+    group_of: &[usize],
     placed: &[frame_corner::Placed],
     corners: &CornerDefaults,
     overrides: &BTreeMap<String, CornerOverride>,
@@ -173,7 +268,7 @@ fn corner_cuts(
         }
         Ok(Some(g))
     };
-    let gap_within = gap("the weld gap", &corners.gap_within)?.unwrap_or(0.0);
+    let gaps = (gap("the weld gap", &corners.gap_within)?.unwrap_or(0.0), gap("the weld gap between groups", &corners.gap_between)?.unwrap_or(0.0));
     let found = junctions_of(lines);
     let mut over = BTreeMap::new();
     let mut gone = Vec::new();
@@ -194,7 +289,7 @@ fn corner_cuts(
     }
     frame_corner::member_cuts(placed, &found, |j| {
         let o = over.get(j.id.as_str()).map(|(o, g)| (*o, *g));
-        frame_corner::settings(j, corners, gap_within, o, lines)
+        frame_corner::settings(j, corners, gaps, o, lines, group_of)
     })
 }
 
@@ -219,24 +314,27 @@ pub struct JunctionReport {
     pub through: Option<String>,
     /// It has settings of its own (`corner_overrides`).
     pub overridden: bool,
+    /// Members of different groups meet here (the between-groups settings apply).
+    pub between: bool,
 }
 
 /// The junctions of frame member feature `f`, in its component's coordinates, with what each gets.
 pub fn feature_junctions(doc: &Document, st: &ModelState, f: &Feature) -> Result<Vec<JunctionReport>> {
-    let FeatureKind::FrameMember { path_sketch, lines, corners, corner_overrides, .. } = &f.kind else {
+    let FeatureKind::FrameMember { path_sketch, lines, groups, corners, corner_overrides, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
-    junctions_on(doc, st, path_sketch.0, lines, corners, corner_overrides, f.component)
+    junctions_on(doc, st, path_sketch.0, (lines, groups), corners, corner_overrides, f.component)
 }
 
-/// The junctions frame members on `lines` of sketch `sketch` (none: all its lines) would have in
+/// The junctions frame members on the lines of sketch `sketch` (the first group's `lines`, none: all
+/// lines no other group has, and the further `groups`) would have in
 /// component `component`'s coordinates, with what each gets from `corners` and `overrides`: what
 /// Frame Member's corner list shows before the feature is made.
 pub fn junctions_on(
     doc: &Document,
     st: &ModelState,
     sketch: u64,
-    lines: &[String],
+    (lines, groups): (&[String], &[frame::MemberGroup]),
     corners: &CornerDefaults,
     overrides: &BTreeMap<String, CornerOverride>,
     component: u64,
@@ -244,16 +342,19 @@ pub fn junctions_on(
     let ps = st.sketch(sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
     let mapped =
         if ps.sketch.wires.is_empty() { Cow::Owned(sketch_in_feature_frame(doc, ps, component)?) } else { path_in_frame(doc, ps, component)? };
-    let segments = member_lines(mapped.as_ref(), lines)?;
+    let (segments, group_of) = grouped_lines(mapped.as_ref(), lines, groups)?;
     let (vals, _) = doc.param_values();
     let gap = |e: &Option<crate::Expr>| e.as_ref().and_then(|e| val(&vals, e, Kind::Length).ok()).filter(|g| *g >= 0.0);
-    let gap_within = gap(&corners.gap_within).unwrap_or(0.0);
+    let gaps = (gap(&corners.gap_within).unwrap_or(0.0), gap(&corners.gap_between).unwrap_or(0.0));
     let line_id = |i: usize| segments.get(i).map(|l| l.id.clone()).unwrap_or_default();
     Ok(junctions_of(&segments)
         .into_iter()
         .map(|j| {
             let over = overrides.get(&j.id);
-            let set = frame_corner::settings(&j, corners, gap_within, over.map(|o| (o, gap(&o.gap))), &segments);
+            let set = frame_corner::settings(&j, corners, gaps, over.map(|o| (o, gap(&o.gap))), &segments, &group_of);
+            let group = |i: usize| group_of.get(i).copied().unwrap_or(0);
+            let first = j.ends.first().map_or(0, |e| group(e.0));
+            let between = j.ends.iter().map(|e| e.0).chain(j.span).any(|i| group(i) != first);
             JunctionReport {
                 id: j.id.clone(),
                 kind: j.kind,
@@ -269,6 +370,7 @@ pub fn junctions_on(
                 .then(|| set.rank.first().map(|i| line_id(*i)))
                 .flatten(),
                 overridden: over.is_some(),
+                between,
             }
         })
         .collect())
@@ -283,10 +385,12 @@ pub(super) fn junctions_of(lines: &[MemberLine]) -> Vec<frame_corner::Junction> 
 /// The point member `line` of `f` turns about, halfway along it: the centre of the profile's
 /// bounding box, which a Rotate step's turn leaves where it is ([`member_plane`]).
 pub(crate) fn member_pivot(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState, line: &str) -> Result<Vec3> {
-    let Layout { segments, at, turn, centre, normal, .. } = layout(doc, vals, f, st)?;
-    let l = segments.iter().find(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let plane =
-        member_plane(l.a, l.b, turn, at, centre, None, normal).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
+    let Layout { segments, group_of, sections, normal, .. } = layout(doc, vals, f, st)?;
+    let k = segments.iter().position(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
+    let (l, g) = (&segments[k], group_of.get(k).copied().unwrap_or(0));
+    let (_, at, turn, _, centre) = sections.get(g).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no group {g}")))?;
+    let plane = member_plane(l.a, l.b, *turn, *at, *centre, None, normal)
+        .ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
     Ok(plane.origin + plane.x * centre.x + plane.y * centre.y + (l.b - l.a) * 0.5)
 }
 
@@ -294,13 +398,54 @@ pub(crate) fn member_pivot(doc: &Document, vals: &BTreeMap<String, Value>, f: &F
 /// other body has it, else the first free one of `base`, `base (2)`, `base (3)`… that no line has
 /// pinned. A member therefore keeps its name when other lines are added, deleted or reordered.
 pub fn member_names(st: &ModelState, lines: &[String], pinned: &BTreeMap<String, String>, base: &str) -> Vec<String> {
-    let reserved: HashSet<&str> = pinned.values().map(String::as_str).collect();
-    let mut used: HashSet<String> = HashSet::new();
+    member_names_reserving(st, lines, pinned, &BTreeMap::new(), std::iter::empty(), base)
+}
+
+/// The body name of the member on each of `lines`, whose groups `group_of` gives: as
+/// [`member_names`] for each group with its `bases` entry, a name `pinned` to a line of another
+/// group reserved for it, so names hold across groups too.
+pub fn grouped_member_names(st: &ModelState, lines: &[String], group_of: &[usize], bases: &[&str], pinned: &BTreeMap<String, String>) -> Vec<String> {
+    let mut taken: Vec<Option<String>> = vec![None; lines.len()];
+    for (k, base) in bases.iter().enumerate() {
+        let picked: Vec<usize> = (0..lines.len()).filter(|i| group_of.get(*i) == Some(&k)).collect();
+        let ids: Vec<String> = picked.iter().filter_map(|i| lines.get(*i).cloned()).collect();
+        let (mine, others): (BTreeMap<String, String>, BTreeMap<String, String>) =
+            pinned.iter().map(|(l, n)| (l.clone(), n.clone())).partition(|(l, _)| ids.contains(l));
+        let used: Vec<String> = taken.iter().flatten().cloned().collect();
+        for (i, name) in picked.into_iter().zip(member_names_reserving(st, &ids, &mine, &others, used.iter(), base)) {
+            if let Some(slot) = taken.get_mut(i) {
+                *slot = Some(name);
+            }
+        }
+    }
+    taken.into_iter().map(Option::unwrap_or_default).collect()
+}
+
+/// The member lines of sketch `sketch` for the first group's `lines` and further `groups`, each
+/// with its group (0: the first).
+pub fn line_groups_on(st: &ModelState, sketch: u64, lines: &[String], groups: &[frame::MemberGroup]) -> Result<(Vec<String>, Vec<usize>)> {
+    let ps = st.sketch(sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
+    let (out, group_of) = grouped_lines(ps, lines, groups)?;
+    Ok((out.into_iter().map(|l| l.id).collect(), group_of))
+}
+
+/// [`member_names`] for one group of a feature: `others` (the other groups' pinned names) are
+/// reserved too, and `used` (names given to members already) taken.
+fn member_names_reserving<'a>(
+    st: &ModelState,
+    lines: &[String],
+    pinned: &BTreeMap<String, String>,
+    others: &BTreeMap<String, String>,
+    used: impl Iterator<Item = &'a String>,
+    base: &str,
+) -> Vec<String> {
+    let reserved: HashSet<&str> = pinned.values().chain(others.values()).map(String::as_str).collect();
+    let mut used: HashSet<String> = used.cloned().collect();
     let mut out: Vec<Option<String>> = lines
         .iter()
         .map(|line| {
             let n = pinned.get(line).map(|n| n.trim()).filter(|n| !n.is_empty() && st.body(n).is_none())?;
-            used.insert(n.to_string()).then(|| n.to_string())
+            (!others.values().any(|o| o == n) && used.insert(n.to_string())).then(|| n.to_string())
         })
         .collect();
     let base = if base.trim().is_empty() { "Member" } else { base.trim() };
@@ -371,18 +516,17 @@ pub(super) fn check_turn(doc: &Document, vals: &BTreeMap<String, Value>, f: &Fea
 
 /// The ids of the lines of sketch `sketch` members would be made on (`lines`, or none: every
 /// straight line), in the order they are made.
-pub fn line_ids_on(st: &ModelState, sketch: u64, lines: &[String]) -> Result<Vec<String>> {
+pub fn line_ids_on(st: &ModelState, sketch: u64, lines: &[String], groups: &[frame::MemberGroup]) -> Result<Vec<String>> {
     let ps = st.sketch(sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
-    Ok(member_lines(ps, lines)?.into_iter().map(|l| l.id).collect())
+    Ok(grouped_lines(ps, lines, groups)?.0.into_iter().map(|l| l.id).collect())
 }
 
 /// The ids of a `FrameMember` feature's lines in `st`, in the order its members are made.
 pub fn member_line_ids(st: &ModelState, kind: &FeatureKind) -> Result<Vec<String>> {
-    let FeatureKind::FrameMember { path_sketch, lines, .. } = kind else {
+    let FeatureKind::FrameMember { path_sketch, lines, groups, .. } = kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
-    let ps = st.sketch(path_sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {path_sketch}")))?;
-    Ok(member_lines(ps, lines)?.into_iter().map(|l| l.id).collect())
+    line_ids_on(st, path_sketch.0, lines, groups)
 }
 
 /// The section of profile sketch `sketch` as a member would take it (its material, or the

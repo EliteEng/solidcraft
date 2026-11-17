@@ -349,8 +349,36 @@ impl crate::walk::Walk for ProfileSpec {
 }
 
 pub use crate::eval::frame_member::{
-    JunctionReport, feature_junctions, junctions_on, line_ids_on, member_line_ids, member_names, member_turns, sketch_point, sketch_section,
+    JunctionReport, feature_junctions, grouped_member_names, junctions_on, line_groups_on, line_ids_on, member_line_ids, member_names, member_turns,
+    sketch_point, sketch_section,
 };
+
+/// Most groups one frame member feature has, its own fields' group included.
+pub const MAX_GROUPS: usize = 64;
+
+/// A frame member feature's further group of lines (the feature's own fields are its first
+/// group): members with their own profile and placement, whose corners with the other groups'
+/// members follow the feature's between-groups settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
+pub struct MemberGroup {
+    /// Stable through edits: `g2`, `g3`…
+    pub id: String,
+    /// What its members are named after (then numbered); none: the profile's description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Its lines, by curve id; each line is in at most one group.
+    pub lines: Vec<String>,
+    pub profile: MemberProfile,
+    #[serde(default, skip_serializing_if = "Anchor::is_origin")]
+    pub anchor: Anchor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[walk(angle = "Rotation")]
+    pub angle: Option<Expr>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mirror: bool,
+}
 
 /// Where a frame member's cross-section comes from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]

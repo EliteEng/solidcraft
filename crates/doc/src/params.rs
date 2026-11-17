@@ -1166,7 +1166,7 @@ impl Document {
             names.extend(self.plastic.rules.iter().flat_map(|r| r.fields()).flat_map(|(f, e, _)| rule_references(f, e)));
         }
         // Members made from a library profile rebuild when its parameters change.
-        if let Some(lp) = f.kind.library_profile().and_then(|id| self.library_profile(id)) {
+        for lp in f.kind.library_profiles().into_iter().filter_map(|id| self.library_profile(id)) {
             names.extend(lp.references());
         }
         names
@@ -1198,9 +1198,10 @@ impl Document {
             hit |= (sheet && f.kind.is_sheet()) || (plastic && f.kind.is_plastic());
             hit |= f
                 .kind
-                .library_profile()
-                .and_then(|id| self.library_profile(id))
-                .is_some_and(|lp| lp.references().iter().any(|r| affected.contains(r)));
+                .library_profiles()
+                .into_iter()
+                .filter_map(|id| self.library_profile(id))
+                .any(|lp| lp.references().iter().any(|r| affected.contains(r)));
             hit |= f.kind.expressions().iter().any(|e| expr::references(e).iter().any(|r| affected.contains(r)));
             if let FeatureKind::Sketch { sketch, .. } = &f.kind {
                 hit |= sketch.dimension_params().into_iter().any(|p| affected.contains(p));

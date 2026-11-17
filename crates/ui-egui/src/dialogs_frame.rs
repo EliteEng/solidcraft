@@ -87,6 +87,26 @@ pub struct Member {
     pub pinned: BTreeMap<String, String>,
     /// What the corner list and the view call each line: its member's name where known.
     pub line_names: BTreeMap<String, String>,
+    /// The group the rows and the Lines and Section picks edit: an index into `slots`.
+    pub group: usize,
+    /// Every group (the feature's own fields first), the edited one as it was when the window
+    /// switched to it; empty: one group, the window's own.
+    pub slots: Vec<Slot>,
+    /// Where groups meet: an index into [`CORNERS`] (default Butt).
+    pub between: usize,
+    /// The weld gap where groups meet; empty: none.
+    pub gap_between: String,
+    /// The later group runs through where groups meet, not the earlier.
+    pub group_later: bool,
+}
+
+/// One group of the Frame Member window: its id, its rows' values (in `m`) and its picks.
+#[derive(Clone, Debug)]
+pub struct Slot {
+    pub id: String,
+    pub m: Box<Member>,
+    pub lines: Vec<Sel>,
+    pub section: Vec<Sel>,
 }
 
 /// The Corners choices, as `frame.member`'s `corners.treatment` spells them, with their labels.
@@ -131,6 +151,11 @@ impl Member {
             junctions: None,
             pinned: BTreeMap::new(),
             line_names: BTreeMap::new(),
+            group: 0,
+            slots: Vec::new(),
+            between: 1,
+            gap_between: String::new(),
+            group_later: false,
         }
     }
 }
@@ -151,9 +176,13 @@ fn tr(text: &str) -> &str {
 }
 
 /// The dialog's own rows (after the selection inputs); true when Enter was pressed in a value.
-pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &[SelInput]) -> bool {
+pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut [SelInput]) -> bool {
     let mut enter = false;
-    form_row(ui, "All Lines", |ui| check(ui, &mut m.all));
+    group_rows(ui, m, inputs);
+    let inputs: &[SelInput] = inputs;
+    if m.group == 0 {
+        form_row(ui, "All Lines", |ui| check(ui, &mut m.all));
+    }
     let picked = !crate::selection::items(inputs, 1).is_empty();
     if let Some(sketch) = m.whole.filter(|_| !picked) {
         let name = app.session.doc.feature(sketch).map(|f| f.name.clone()).unwrap_or_default();
@@ -213,6 +242,17 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &[Sel
     if CORNERS.get(m.corner).is_some_and(|c| c.0 == "butt") {
         let labels: Vec<&str> = BUTT_THROUGH.iter().map(|c| tr(c.1)).collect();
         choice_row(ui, "ui.frame_butt_through", "frame_butt_through", &mut m.through, &labels);
+    }
+    if m.slots.len() > 1 {
+        let labels: Vec<&str> = CORNERS.iter().map(|c| tr(c.1)).collect();
+        choice_row(ui, "ui.frame_between_groups", "frame_between_groups", &mut m.between, &labels);
+        if CORNERS.get(m.between).is_some_and(|c| c.0 != "none") {
+            enter |= hint_row(ui, "ui.frame_gap_between", &mut m.gap_between, "0 mm");
+            let labels = [tr("ui.frame_group_earlier"), tr("ui.frame_group_later")];
+            let mut later = usize::from(m.group_later);
+            choice_row(ui, "ui.frame_group_through", "frame_group_through", &mut later, &labels);
+            m.group_later = later == 1;
+        }
     }
     refresh_junctions(app, m, inputs);
     corner_list(ui, m);
@@ -507,42 +547,30 @@ fn point_row(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, sketch_section: 
 
 /// The command the dialog's OK runs (`extra`: parameters kept from the feature being edited).
 pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<String, Value>) -> Result<Vec<(String, Value)>, String> {
-    let section = crate::selection::items(inputs, 1).profiles();
-    let section_sketch = section.first().map(|x| x.0).or(m.whole);
-    if section.iter().any(|x| Some(x.0) != section_sketch) {
-        return Err("the section's profiles must be in one sketch".into());
-    }
-    let (sketch, lines) = path(app, inputs, section_sketch)?;
-    let mut p = json!({"sketch": sketch});
+    let slots = all_slots(m, inputs);
+    let Some(first) = slots.first() else { return Err("no group".into()) };
+    let (_, section_sketch) = section_of(&first.section, first.m.whole)?;
+    let (sketch, lines) = path(app, &first.lines, section_sketch)?;
+    let mut p = group_params(app, &first.m, &first.section, "body_name")?;
+    p["sketch"] = json!(sketch);
     if !m.all {
         p["lines"] = json!(lines);
     }
-    if let Some(ps) = section_sketch {
-        p["profile_sketch"] = json!(ps);
-        if !section.is_empty() {
-            p["profiles"] = json!(section.iter().map(|x| x.1).collect::<Vec<_>>());
+    let mut groups = Vec::new();
+    for (k, g) in slots.iter().enumerate().skip(1) {
+        let label = |e: String| format!("{} {}: {e}", tr("ui.frame_member_group"), k + 1);
+        let (_, section_sketch) = section_of(&g.section, g.m.whole).map_err(label)?;
+        let (their, lines) = path(app, &g.lines, section_sketch).map_err(label)?;
+        if their != sketch {
+            return Err(label("its lines must be in the first group's sketch".into()));
         }
-    } else if let Some(id) = &m.library {
-        // A personal profile goes whole: the member copies it into the design's library.
-        p["library"] = match app.preferences.frame_profiles.get(id) {
-            Some(e) if app.session.doc.library_profile(id).is_none() => crate::frame_personal::member_library(e),
-            _ => json!(id),
-        };
-    } else {
-        p["profile"] = builtin_profile(m)?;
+        let mut q = group_params(app, &g.m, &g.section, "body_name").map_err(label)?;
+        q["id"] = json!(g.id);
+        q["lines"] = json!(lines);
+        groups.push(q);
     }
-    if m.anchor != 0
-        && let Some((anchor, _)) = ANCHORS.get(m.anchor)
-    {
-        p["anchor"] = json!(anchor);
-    }
-    if let Some(point) = &m.point {
-        p["point"] = json!(point);
-    }
-    put(&mut p, &[("angle", &m.angle), ("body_name", m.name.trim())]);
-    if m.mirror {
-        p["mirror"] = json!(true);
-    }
+    // Always sent, so an edit that removes the last further group clears them.
+    p["groups"] = json!(groups);
     p["corners"] = corners(m);
     p["corner_overrides"] = json!(m.overrides);
     if let Value::Object(o) = &mut p {
@@ -554,11 +582,10 @@ pub fn commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<Str
 }
 
 /// The frame sketch and the lines picked in it.
-fn path(app: &SolveApp, inputs: &[SelInput], section_sketch: Option<u64>) -> Result<(u64, Vec<String>), String> {
+fn path(app: &SolveApp, picks: &[Sel], section_sketch: Option<u64>) -> Result<(u64, Vec<String>), String> {
     // A line picked in the view comes with its sketch (line ids are a sketch's own); a line
     // selected before the dialog opened is looked for in the newest sketch with it, not the
     // section's.
-    let picks = crate::selection::items(inputs, 0);
     let mut lines = Vec::new();
     let mut known = None;
     for pick in picks {
@@ -596,6 +623,18 @@ fn corners(m: &Member) -> Value {
             c["butt_through"] = json!(through);
         }
     }
+    if m.slots.len() > 1 {
+        let between = CORNERS.get(m.between).map_or("butt", |c| c.0);
+        c["between_groups"] = json!(between);
+        if between != "none" {
+            if !m.gap_between.trim().is_empty() {
+                c["gap_between"] = json!(m.gap_between.trim());
+            }
+            if m.group_later {
+                c["group_through"] = json!("later");
+            }
+        }
+    }
     c
 }
 
@@ -614,6 +653,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
         names,
         corners,
         corner_overrides,
+        groups,
         ..
     } = kind
     else {
@@ -623,11 +663,70 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
     let st = app.session.model.state();
     let mut m = Member::new();
     m.all = lines.is_empty();
-    let ids = if m.all { frame::member_line_ids(&st, kind).unwrap_or_default() } else { lines.clone() };
+    // With All Lines, the first group's lines are the ones no other group has.
+    let ids = if m.all {
+        frame::line_groups_on(&st, path_sketch.0, &[], groups)
+            .map(|(ids, of)| ids.into_iter().zip(of).filter(|(_, g)| *g == 0).map(|(id, _)| id).collect())
+            .unwrap_or_default()
+    } else {
+        lines.clone()
+    };
+    let curves = |ids: &[String]| ids.iter().map(|id| Sel::ExternalSketchCurve { sketch: path_sketch.0, id: id.clone() }).collect::<Vec<_>>();
+    let mut section = Vec::new();
+    let own = GroupValues { profile, anchor: *anchor, point, angle, mirror: *mirror, name: body_name };
+    load_group(&st, &mut m, &mut section, &own);
     if let Some(i) = inputs.get_mut(0) {
-        i.items = ids.into_iter().map(|id| Sel::ExternalSketchCurve { sketch: path_sketch.0, id }).collect();
+        i.items = curves(&ids);
     }
-    match profile {
+    if let Some(i) = inputs.get_mut(1) {
+        i.items = section.clone();
+    }
+    if !groups.is_empty() {
+        let mut first = Member::new();
+        take_group(&mut first, &m);
+        m.slots.push(Slot { id: "g1".into(), m: Box::new(first), lines: curves(&ids), section });
+        for g in groups {
+            let mut gm = Member::new();
+            let mut section = Vec::new();
+            let values = GroupValues { profile: &g.profile, anchor: g.anchor, point: &g.point, angle: &g.angle, mirror: g.mirror, name: &g.name };
+            load_group(&st, &mut gm, &mut section, &values);
+            m.slots.push(Slot { id: g.id.clone(), m: Box::new(gm), lines: curves(&g.lines), section });
+        }
+    }
+    let treatment = serde_json::to_value(corners.within_group).ok();
+    m.corner = CORNERS.iter().position(|c| treatment.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
+    m.gap = corners.gap_within.as_deref().map(|g| shown_expr(g, ValueKind::Length)).unwrap_or_default();
+    m.flush = !corners.butt_cut.is_square();
+    let through = serde_json::to_value(corners.butt_through).ok();
+    m.through = BUTT_THROUGH.iter().position(|c| through.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
+    let between = serde_json::to_value(corners.between_groups).ok();
+    m.between = CORNERS.iter().position(|c| between.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(1);
+    m.gap_between = corners.gap_between.as_deref().map(|g| shown_expr(g, ValueKind::Length)).unwrap_or_default();
+    m.group_later = !corners.group_through.is_earlier();
+    m.overrides = corner_overrides.clone();
+    m.pinned = names.clone();
+    // The dialog has no field for a located point: an edit keeps it, so the member stays where it
+    // is attached.
+    let mut extra = Map::new();
+    if let Some(at) = locate {
+        extra.insert("locate".into(), json!(at));
+    }
+    Some((Kind::Frame(m), inputs, extra))
+}
+
+/// One group's saved settings: the feature's own fields or a `MemberGroup`'s.
+struct GroupValues<'a> {
+    profile: &'a MemberProfile,
+    anchor: frame::Anchor,
+    point: &'a Option<String>,
+    angle: &'a Option<solidcraft_engine::doc::Expr>,
+    mirror: bool,
+    name: &'a Option<String>,
+}
+
+/// Fill a group's rows (and its section picks) from its saved settings.
+fn load_group(st: &solidcraft_engine::doc::ModelState, m: &mut Member, section: &mut Vec<Sel>, g: &GroupValues) {
+    match g.profile {
         MemberProfile::Library { profile } => {
             let kinds = frame::profile_kinds();
             if let Some((index, k)) = kinds.iter().enumerate().find(|(_, k)| k.kind == profile.kind)
@@ -643,32 +742,162 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
         MemberProfile::Sketch { sketch, profiles: ProfileSel::All } => m.whole = Some(sketch.0),
         MemberProfile::Sketch { sketch, profiles } => {
             let picks = st.sketch(sketch.0).map(|ss| profile_indices(ss, profiles)).unwrap_or_default();
-            if let Some(i) = inputs.get_mut(1) {
-                i.items = picks.into_iter().map(|index| Sel::Profile { sketch: sketch.0, index }).collect();
-            }
+            *section = picks.into_iter().map(|index| Sel::Profile { sketch: sketch.0, index }).collect();
         }
     }
-    let anchor = serde_json::to_value(anchor).ok();
+    let anchor = serde_json::to_value(g.anchor).ok();
     m.anchor = ANCHORS.iter().position(|(a, _)| anchor.as_ref().and_then(Value::as_str) == Some(*a)).unwrap_or(0);
-    m.point = point.clone();
-    m.angle = angle.as_deref().map(|a| shown_expr(a, ValueKind::Angle)).unwrap_or_default();
-    m.mirror = *mirror;
-    m.name = body_name.clone().unwrap_or_default();
-    let treatment = serde_json::to_value(corners.within_group).ok();
-    m.corner = CORNERS.iter().position(|c| treatment.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
-    m.gap = corners.gap_within.as_deref().map(|g| shown_expr(g, ValueKind::Length)).unwrap_or_default();
-    m.flush = !corners.butt_cut.is_square();
-    let through = serde_json::to_value(corners.butt_through).ok();
-    m.through = BUTT_THROUGH.iter().position(|c| through.as_ref().and_then(Value::as_str) == Some(c.0)).unwrap_or(0);
-    m.overrides = corner_overrides.clone();
-    m.pinned = names.clone();
-    // The dialog has no field for a located point: an edit keeps it, so the member stays where it
-    // is attached.
-    let mut extra = Map::new();
-    if let Some(at) = locate {
-        extra.insert("locate".into(), json!(at));
+    m.point = g.point.clone();
+    m.angle = g.angle.as_deref().map(|a| shown_expr(a, ValueKind::Angle)).unwrap_or_default();
+    m.mirror = g.mirror;
+    m.name = g.name.clone().unwrap_or_default();
+}
+
+/// The Group row: which group the rows edit, New group and Remove group.
+fn group_rows(ui: &mut egui::Ui, m: &mut Member, inputs: &mut [SelInput]) {
+    let count = m.slots.len().max(1);
+    let mut labels: Vec<String> = (1..=count).map(|n| format!("{} {n}", tr("ui.frame_member_group"))).collect();
+    if count < frame::MAX_GROUPS {
+        labels.push(tr("ui.frame_new_group").to_string());
     }
-    Some((Kind::Frame(m), inputs, extra))
+    let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let mut chosen = m.group;
+    if choice_row(ui, "ui.frame_member_group", "frame_member_group", &mut chosen, &shown).changed() {
+        if chosen >= count {
+            new_group(m, inputs);
+        } else {
+            switch_group(m, inputs, chosen);
+        }
+    }
+    if m.group > 0 && crate::ui_kit::row(ui, "", |ui| crate::ui_kit::button(ui, tr("ui.frame_remove_group"), crate::ui_kit::Button::Small).clicked())
+    {
+        remove_group(m, inputs);
+    }
+}
+
+/// Copy the rows that belong to a group (the profile, its placement and name) from `src`.
+fn take_group(dst: &mut Member, src: &Member) {
+    dst.kind = src.kind;
+    dst.dims = src.dims.clone();
+    dst.whole = src.whole;
+    dst.anchor = src.anchor;
+    dst.library = src.library.clone();
+    dst.folder = src.folder.clone();
+    dst.point = src.point.clone();
+    dst.angle = src.angle.clone();
+    dst.mirror = src.mirror;
+    dst.name = src.name.clone();
+}
+
+/// The group the window edits now, as a slot.
+fn live(m: &Member, inputs: &[SelInput]) -> Slot {
+    let mut copy = Member::new();
+    take_group(&mut copy, m);
+    let id = m.slots.get(m.group).map_or_else(|| "g1".to_string(), |s| s.id.clone());
+    Slot { id, m: Box::new(copy), lines: crate::selection::items(inputs, 0).to_vec(), section: crate::selection::items(inputs, 1).to_vec() }
+}
+
+/// Every group, the edited one as the window shows it now.
+fn all_slots(m: &Member, inputs: &[SelInput]) -> Vec<Slot> {
+    let mut out = if m.slots.is_empty() { vec![live(m, inputs)] } else { m.slots.clone() };
+    if let Some(slot) = out.get_mut(m.group) {
+        *slot = live(m, inputs);
+    }
+    out
+}
+
+/// Put slot `next`'s rows and picks in the window.
+fn show_slot(m: &mut Member, inputs: &mut [SelInput], next: Slot) {
+    take_group(m, &next.m);
+    if let Some(i) = inputs.get_mut(0) {
+        i.items = next.lines;
+    }
+    if let Some(i) = inputs.get_mut(1) {
+        i.items = next.section;
+    }
+}
+
+/// Show group `to` in the rows and the picks, keeping the one shown.
+fn switch_group(m: &mut Member, inputs: &mut [SelInput], to: usize) {
+    let slots = all_slots(m, inputs);
+    let Some(next) = slots.get(to).cloned() else { return };
+    m.slots = slots;
+    show_slot(m, inputs, next);
+    m.group = to;
+}
+
+/// Add a group (with the shown group's profile, no lines) and show it.
+fn new_group(m: &mut Member, inputs: &mut [SelInput]) {
+    let mut slots = all_slots(m, inputs);
+    if slots.len() >= frame::MAX_GROUPS {
+        return;
+    }
+    let id = (2..).map(|n| format!("g{n}")).find(|id| !slots.iter().any(|s| s.id == *id)).unwrap_or_default();
+    let mut copy = Member::new();
+    take_group(&mut copy, m);
+    copy.name.clear();
+    slots.push(Slot { id, m: Box::new(copy), lines: Vec::new(), section: crate::selection::items(inputs, 1).to_vec() });
+    m.slots = slots;
+    let to = m.slots.len() - 1;
+    switch_group(m, inputs, to);
+}
+
+/// Drop the shown group (not the first) and show the one before it.
+fn remove_group(m: &mut Member, inputs: &mut [SelInput]) {
+    if m.group == 0 || m.group >= m.slots.len() {
+        return;
+    }
+    m.slots.remove(m.group);
+    let to = m.group - 1;
+    let Some(next) = m.slots.get(to).cloned() else { return };
+    show_slot(m, inputs, next);
+    m.group = to;
+    if m.slots.len() == 1 {
+        m.slots.clear();
+    }
+}
+
+/// The picks' profiles, all in one sketch.
+fn section_of(section: &[Sel], whole: Option<u64>) -> Result<(Vec<(u64, usize)>, Option<u64>), String> {
+    let profiles = section.profiles();
+    let sketch = profiles.first().map(|x| x.0).or(whole);
+    if profiles.iter().any(|x| Some(x.0) != sketch) {
+        return Err("the section's profiles must be in one sketch".into());
+    }
+    Ok((profiles, sketch))
+}
+
+/// A group's keys for `frame.member` (or a `groups` entry): its profile, placement and name.
+fn group_params(app: &SolveApp, g: &Member, section: &[Sel], name_key: &str) -> Result<Value, String> {
+    let (profiles, section_sketch) = section_of(section, g.whole)?;
+    let mut p = json!({});
+    if let Some(ps) = section_sketch {
+        p["profile_sketch"] = json!(ps);
+        if !profiles.is_empty() {
+            p["profiles"] = json!(profiles.iter().map(|x| x.1).collect::<Vec<_>>());
+        }
+    } else if let Some(id) = &g.library {
+        // A personal profile goes whole: the member copies it into the design's library.
+        p["library"] = match app.preferences.frame_profiles.get(id) {
+            Some(e) if app.session.doc.library_profile(id).is_none() => crate::frame_personal::member_library(e),
+            _ => json!(id),
+        };
+    } else {
+        p["profile"] = builtin_profile(g)?;
+    }
+    if g.anchor != 0
+        && let Some((anchor, _)) = ANCHORS.get(g.anchor)
+    {
+        p["anchor"] = json!(anchor);
+    }
+    if let Some(point) = &g.point {
+        p["point"] = json!(point);
+    }
+    put(&mut p, &[("angle", &g.angle), (name_key, g.name.trim())]);
+    if g.mirror {
+        p["mirror"] = json!(true);
+    }
+    Ok(p)
 }
 
 /// The feature's corner settings as the Corners rows set them.
@@ -679,33 +908,56 @@ fn corner_defaults(m: &Member) -> CornerDefaults {
         "gap_within": c.get("gap").cloned().unwrap_or(Value::Null),
         "butt_cut": c.get("butt_cut").cloned().unwrap_or(json!("square")),
         "butt_through": c.get("butt_through").cloned().unwrap_or(json!("longer")),
+        "between_groups": c.get("between_groups").cloned().unwrap_or(json!("butt")),
+        "gap_between": c.get("gap_between").cloned().unwrap_or(Value::Null),
+        "group_through": c.get("group_through").cloned().unwrap_or(json!("earlier")),
     });
     serde_json::from_value(doc).unwrap_or_default()
 }
 
 /// Work out the junctions of the lines picked again when the path or the corner settings changed.
 pub fn refresh_junctions(app: &SolveApp, m: &mut Member, inputs: &[SelInput]) {
-    let section_sketch = crate::selection::items(inputs, 1).profiles().first().map(|x| x.0).or(m.whole);
-    let Ok((sketch, lines)) = path(app, inputs, section_sketch) else {
+    let slots = all_slots(m, inputs);
+    let Some(first) = slots.first() else { return };
+    let section_sketch = first.section.profiles().first().map(|x| x.0).or(first.m.whole);
+    let Ok((sketch, lines)) = path(app, &first.lines, section_sketch) else {
         m.junctions = None;
         return;
     };
     let lines = if m.all { Vec::new() } else { lines };
+    // Only the further groups' lines matter here, not their sections.
+    let groups: Vec<frame::MemberGroup> = slots
+        .iter()
+        .skip(1)
+        .filter_map(|g| path(app, &g.lines, None).ok().filter(|(s, _)| *s == sketch))
+        .enumerate()
+        .map(|(k, (_, lines))| frame::MemberGroup {
+            id: format!("g{}", k + 2),
+            name: None,
+            lines,
+            profile: MemberProfile::LibraryProfile { id: String::new() },
+            anchor: frame::Anchor::default(),
+            point: None,
+            angle: None,
+            mirror: false,
+        })
+        .collect();
     let defaults = corner_defaults(m);
-    let key = json!([sketch, lines, defaults, m.overrides, m.name.trim()]).to_string();
+    let group_lines: Vec<&Vec<String>> = groups.iter().map(|g| &g.lines).collect();
+    let key = json!([sketch, lines, group_lines, defaults, m.overrides, m.name.trim()]).to_string();
     if m.junctions.as_ref().is_some_and(|(k, _)| *k == key) {
         return;
     }
     let st = app.session.model.state();
     let component = app.session.doc.feature(sketch).map_or(0, |f| f.component);
-    let found = frame::junctions_on(&app.session.doc, &st, sketch, &lines, &defaults, &m.overrides, component).unwrap_or_default();
+    let found = frame::junctions_on(&app.session.doc, &st, sketch, (&lines, &groups), &defaults, &m.overrides, component).unwrap_or_default();
     m.junctions = Some((key, found));
     // Members are named as the feature names them: an edited feature's pinned names; a new one's
     // after Name (without one, after the profile, which the list doesn't know yet).
     m.line_names = if !m.pinned.is_empty() {
         m.pinned.clone()
-    } else if !m.name.trim().is_empty() {
-        let ids = frame::line_ids_on(&st, sketch, &lines).unwrap_or_default();
+    } else if !m.name.trim().is_empty() && groups.is_empty() {
+        let ids = frame::line_ids_on(&st, sketch, &lines, &groups).unwrap_or_default();
         ids.iter().cloned().zip(frame::member_names(&st, &ids, &BTreeMap::new(), m.name.trim())).collect()
     } else {
         BTreeMap::new()

@@ -75,6 +75,22 @@ impl ButtThrough {
     }
 }
 
+/// Which group's members run through where groups meet at a butt: the group listed earlier (the
+/// feature's own fields first) or the one listed later.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupThrough {
+    #[default]
+    Earlier,
+    Later,
+}
+
+impl GroupThrough {
+    pub fn is_earlier(&self) -> bool {
+        *self == GroupThrough::Earlier
+    }
+}
+
 /// A feature's corner settings: what every junction gets unless an override says otherwise.
 /// The default (what a design saved before corners existed reads) is no treatment, so it rebuilds
 /// as it did.
@@ -92,6 +108,15 @@ pub struct CornerDefaults {
     pub butt_cut: ButtCut,
     #[serde(default, skip_serializing_if = "ButtThrough::is_longer")]
     pub butt_through: ButtThrough,
+    /// Where members of different groups meet (any kind of junction); mitre only at an L.
+    #[serde(default, skip_serializing_if = "Treatment::is_none")]
+    pub between_groups: Treatment,
+    /// The weld gap where groups meet. None: 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[walk(length = "Weld gap between groups")]
+    pub gap_between: Option<Expr>,
+    #[serde(default, skip_serializing_if = "GroupThrough::is_earlier")]
+    pub group_through: GroupThrough,
 }
 
 impl CornerDefaults {
@@ -99,9 +124,9 @@ impl CornerDefaults {
         *self == CornerDefaults::default()
     }
 
-    /// New members' defaults: mitred corners, no gap.
+    /// New members' defaults: mitred corners within a group, butts between groups, no gap.
     pub fn mitre() -> CornerDefaults {
-        CornerDefaults { within_group: Treatment::Mitre, ..CornerDefaults::default() }
+        CornerDefaults { within_group: Treatment::Mitre, between_groups: Treatment::Butt, ..CornerDefaults::default() }
     }
 }
 
@@ -528,11 +553,23 @@ fn butt(t: &Placed, ut: Vec3, b: &Placed, ub: Vec3, n0: Vec3, gap: f64, cut: But
     })
 }
 
-/// The settings junction `j` gets: the feature's `defaults` (with its gap `gap`), changed by `over`
-/// (with its gap `over_gap`), its `through` line found among `lines`; the rest ranked by the
-/// feature's `butt_through`.
-pub fn settings(j: &Junction, defaults: &CornerDefaults, gap: f64, over: Option<(&CornerOverride, Option<f64>)>, lines: &[MemberLine]) -> Settings {
-    let mut s = Settings { treatment: defaults.within_group, gap, butt_cut: defaults.butt_cut, rank: Vec::new() };
+/// The settings junction `j` gets: the feature's `defaults` with its gaps `gaps` (within a group,
+/// between groups), changed by `over` (with its own gap), its `through` line found among `lines`;
+/// the rest ranked by group (`group_through`; `groups` holds each line's group) and then by the
+/// feature's `butt_through`. Where members of different groups meet, the between-groups settings
+/// apply.
+pub fn settings(
+    j: &Junction,
+    defaults: &CornerDefaults,
+    gaps: (f64, f64),
+    over: Option<(&CornerOverride, Option<f64>)>,
+    lines: &[MemberLine],
+    groups: &[usize],
+) -> Settings {
+    let group = |i: usize| groups.get(i).copied().unwrap_or(0);
+    let between = j.ends.iter().chain(j.span.map(|s| (s, End::Start)).iter()).any(|e| group(e.0) != j.ends.first().map_or(0, |f| group(f.0)));
+    let (treatment, gap) = if between { (defaults.between_groups, gaps.1) } else { (defaults.within_group, gaps.0) };
+    let mut s = Settings { treatment, gap, butt_cut: defaults.butt_cut, rank: Vec::new() };
     let mut through = None;
     if let Some((o, g)) = over {
         if let Some(t) = o.treatment {
@@ -549,11 +586,15 @@ pub fn settings(j: &Junction, defaults: &CornerDefaults, gap: f64, over: Option<
     let mut rank: Vec<usize> = j.ends.iter().map(|e| e.0).collect();
     rank.dedup();
     rank.sort_by(|a, b| {
+        let by_group = match defaults.group_through {
+            GroupThrough::Earlier => group(*a).cmp(&group(*b)),
+            GroupThrough::Later => group(*b).cmp(&group(*a)),
+        };
         let longer = longer_first(lines.get(*a), lines.get(*b)).then(a.cmp(b));
-        match defaults.butt_through {
+        by_group.then(match defaults.butt_through {
             ButtThrough::Longer => longer,
             ButtThrough::Shorter => longer.reverse(),
-        }
+        })
     });
     if let Some(t) = through
         && let Some(k) = rank.iter().position(|r| *r == t)

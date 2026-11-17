@@ -200,27 +200,27 @@ fn settings_follow_the_override_and_mitre_is_only_for_an_l() {
     let lines = rectangle();
     let found = junctions(&lines, 1e-6);
     let defaults = CornerDefaults::mitre();
-    let s = settings(&found[0], &defaults, 1.5, None, &lines);
+    let s = settings(&found[0], &defaults, (1.5, 0.0), None, &lines, &[]);
     assert_eq!((s.treatment, s.gap, s.rank.clone()), (Treatment::Mitre, 1.5, vec![0, 3]), "the longer line first");
     let o = CornerOverride { treatment: Some(Treatment::Butt), through: Some("l4".into()), gap: None, butt_cut: Some(ButtCut::Flush) };
-    let s = settings(&found[0], &defaults, 1.5, Some((&o, Some(0.5))), &lines);
+    let s = settings(&found[0], &defaults, (1.5, 0.0), Some((&o, Some(0.5))), &lines, &[]);
     assert_eq!((s.treatment, s.gap, s.butt_cut, s.rank.clone()), (Treatment::Butt, 0.5, ButtCut::Flush, vec![3, 0]));
     // A through line that isn't at the junction is ignored.
     let o = CornerOverride { through: Some("l2".into()), ..CornerOverride::default() };
-    assert_eq!(settings(&found[0], &defaults, 0.0, Some((&o, None)), &lines).rank, vec![0, 3]);
+    assert_eq!(settings(&found[0], &defaults, (0.0, 0.0), Some((&o, None)), &lines, &[]).rank, vec![0, 3]);
     let t = Junction { id: "p9@l1".into(), kind: JunctionKind::T, at: Vec3::ZERO, ends: vec![(1, End::Start)], span: Some(0) };
-    assert_eq!(settings(&t, &defaults, 0.0, None, &lines).treatment, Treatment::Butt);
+    assert_eq!(settings(&t, &defaults, (0.0, 0.0), None, &lines, &[]).treatment, Treatment::Butt);
     // An old design's corners (none) read as none, and say nothing when saved.
     let old: CornerDefaults = serde_json::from_str("{}").unwrap();
-    assert!(old.is_none() && settings(&found[0], &old, 0.0, None, &lines).treatment.is_none());
-    assert_eq!(serde_json::to_string(&CornerDefaults::mitre()).unwrap(), r#"{"within_group":"mitre"}"#);
+    assert!(old.is_none() && settings(&found[0], &old, (0.0, 0.0), None, &lines, &[]).treatment.is_none());
+    assert_eq!(serde_json::to_string(&CornerDefaults::mitre()).unwrap(), r#"{"within_group":"mitre","between_groups":"butt"}"#);
 }
 
 #[test]
 fn the_longer_or_the_shorter_lines_run_through_at_every_corner() {
     let ranks = |lines: &[MemberLine], through: ButtThrough| -> Vec<Vec<usize>> {
         let defaults = CornerDefaults { within_group: Treatment::Butt, butt_through: through, ..CornerDefaults::default() };
-        junctions(lines, 1e-6).iter().map(|j| settings(j, &defaults, 0.0, None, lines).rank).collect()
+        junctions(lines, 1e-6).iter().map(|j| settings(j, &defaults, (0.0, 0.0), None, lines, &[]).rank).collect()
     };
     // The 200 × 100 rectangle: l1 and l3 (the long sides) run through at all four corners, or l2
     // and l4 do.
@@ -239,9 +239,27 @@ fn the_longer_or_the_shorter_lines_run_through_at_every_corner() {
     // An override's line runs through whatever the rule says.
     let defaults = CornerDefaults { within_group: Treatment::Butt, ..CornerDefaults::default() };
     let o = CornerOverride { through: Some("l4".into()), ..CornerOverride::default() };
-    assert_eq!(settings(&junctions(&r, 1e-6)[0], &defaults, 0.0, Some((&o, None)), &r).rank, vec![3, 0]);
+    assert_eq!(settings(&junctions(&r, 1e-6)[0], &defaults, (0.0, 0.0), Some((&o, None)), &r, &[]).rank, vec![3, 0]);
     assert_eq!(
         serde_json::to_string(&CornerDefaults { butt_through: ButtThrough::Shorter, ..CornerDefaults::mitre() }).unwrap(),
-        r#"{"within_group":"mitre","butt_through":"shorter"}"#
+        r#"{"within_group":"mitre","butt_through":"shorter","between_groups":"butt"}"#
     );
+}
+
+#[test]
+fn between_groups_settings_apply_where_groups_meet_and_the_earlier_group_runs_through() {
+    // The rectangle with its short sides (l2, l4) in a second group.
+    let lines = rectangle();
+    let groups = [0, 1, 0, 1];
+    let found = junctions(&lines, 1e-6);
+    let defaults = CornerDefaults { gap_within: None, ..CornerDefaults::mitre() };
+    let s = settings(&found[0], &defaults, (1.0, 2.0), None, &lines, &groups);
+    assert_eq!((s.treatment, s.gap, s.rank.clone()), (Treatment::Butt, 2.0, vec![0, 3]), "between groups: a butt with that gap, group 1 through");
+    let later = CornerDefaults { group_through: GroupThrough::Later, ..defaults.clone() };
+    assert_eq!(settings(&found[0], &later, (1.0, 2.0), None, &lines, &groups).rank, vec![3, 0], "the later group runs through");
+    // The group order wins over longer/shorter, and one group's corners stay within-group.
+    let shorter = CornerDefaults { butt_through: ButtThrough::Shorter, ..defaults.clone() };
+    assert_eq!(settings(&found[0], &shorter, (1.0, 2.0), None, &lines, &groups).rank, vec![0, 3]);
+    let s = settings(&found[0], &defaults, (1.0, 2.0), None, &lines, &[0, 0, 0, 0]);
+    assert_eq!((s.treatment, s.gap), (Treatment::Mitre, 1.0));
 }

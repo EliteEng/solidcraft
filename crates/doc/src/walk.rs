@@ -69,6 +69,7 @@ impl Walk for crate::frame::Anchor {}
 impl Walk for crate::frame_corner::Treatment {}
 impl Walk for crate::frame_corner::ButtCut {}
 impl Walk for crate::frame_corner::ButtThrough {}
+impl Walk for crate::frame_corner::GroupThrough {}
 impl Walk for solidcraft_sketch::Sketch {}
 impl Walk for solidcraft_sketch::PatternAlignment {}
 impl Walk for solidcraft_kernel::StepNode {}

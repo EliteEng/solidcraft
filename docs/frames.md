@@ -36,6 +36,12 @@ the selected body (or the last body of the active component).
 
 ## The Frame Member dialog
 
+- **Member group**: one feature can lay several groups of lines, each with its own profile,
+  placement and name (rails in one RHS, posts in another). **New group** starts a group
+  with no lines; the Lines and Section picks and the profile rows below edit the group chosen
+  here, and **Remove group** drops it. All Lines belongs to the first group: the lines no other
+  group has.
+
 - **Lines**: pick the frame sketch's lines in the view (2D or 3D sketch lines). **All Lines**
   makes a member on every line of that sketch instead, including lines drawn later.
 - **Section (optional)**: pick the section's region in another sketch (the ring between two
@@ -170,6 +176,12 @@ Where a feature's members meet is a **junction**:
 Ends meet where they share a sketch point or lie within 10⁻⁶ of the frame's size of each other;
 lines that cross between their ends are no junction.
 
+Where members of different groups meet, the between-groups settings apply instead (the window's
+**Between groups**, **Gap between groups** and **Group runs through**, shown once there are two
+groups): a butt by default (mitre only where two ends meet at an angle), with the earlier group's
+member running through (the first group first) or the later one's. Group order comes before
+longer or shorter at a junction where three or more meet.
+
 - **Mitre**: both members are cut on the plane that mirrors one onto the other, also for lines in
   3D. A gap moves each cut half the gap back along the plane's normal.
 - **Butt**: one member runs through: at an L it runs on to the other's outside face, covering the
@@ -238,8 +250,16 @@ existed has none: its members keep their square ends.
   feature, leaves the other members' names alone; `body.rename` renames a member on its line.
   `names` (`{line id: name}`) gives names to keep, as Edit Feature (`timeline.redefine`) passes
   them unless the edit changes `body_name`.
+- `groups`: `[{id?, lines, profile | profile_sketch (with profiles?) | library, anchor?, point?,
+  angle?, mirror?, body_name?}]`: further groups of lines, read as the feature's own keys are (up
+  to 63; ids default to `g2`, `g3`… and Edit Feature passes them back). A line in two groups is
+  refused, naming the line and the groups. Without `lines`, the first group takes every line no
+  group lists. Members are named per group (`Rail`, `Rail (2)`, `Post`…). An edit without `groups`
+  keeps the feature's; `groups: []` removes them.
 - `corners`: `{treatment?: mitre|butt|none, gap?: length, butt_cut?: square|flush, butt_through?:
-  longer|shorter}` (default: mitre, no gap, square, longer); `corner_overrides`: `{junction id: {treatment?, through?: line id, gap?,
+  longer|shorter, between_groups?: mitre|butt|none, gap_between?: length, group_through?:
+  earlier|later}` (default: mitre, no gap, square, longer; between groups a butt, or none when
+  `treatment` is none, no gap, earlier); `corner_overrides`: `{junction id: {treatment?, through?: line id, gap?,
   butt_cut?}}` (see Corners).
 
 Every built-in profile is SolidCraft's own parametric definition, built in code
@@ -367,7 +387,8 @@ given larger than the room for it.
 
 - `frame.junctions` `{feature}`: a frame member feature's junctions: `id`, `kind` (L, I, T,
   Multi), `at`, the member `ends` that meet (`[line id, start|end]`), `span` (the line a T lands
-  on), and what it gets (`treatment`, `gap`, `butt_cut`, `through`, `overridden`).
+  on), and what it gets (`treatment`, `gap`, `butt_cut`, `through`, `overridden`, and `between`
+  where members of different groups meet).
 - `frame.profile.list` `{family?}`: every kind, its dimensions and a working example; and the
   standard sizes by name, family by family.
 - `frame.profile.properties` `{profile, density?}`: the section, worked out exactly from its lines

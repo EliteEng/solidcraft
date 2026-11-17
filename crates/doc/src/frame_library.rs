@@ -489,16 +489,22 @@ impl crate::Document {
 
     /// The ids of the features whose members are made from library profile `id`.
     pub fn features_using_library_profile(&self, id: &str) -> Vec<u64> {
-        self.features.iter().filter(|f| f.kind.library_profile() == Some(id)).map(|f| f.id).collect()
+        self.features.iter().filter(|f| f.kind.library_profiles().contains(&id)).map(|f| f.id).collect()
     }
 }
 
 impl crate::FeatureKind {
-    /// The library profile a frame member feature is made from, by id.
-    pub fn library_profile(&self) -> Option<&str> {
-        match self {
-            crate::FeatureKind::FrameMember { profile: frame::MemberProfile::LibraryProfile { id }, .. } => Some(id.as_str()),
-            _ => None,
+    /// The library profiles a frame member feature's groups are made from, by id.
+    pub fn library_profiles(&self) -> Vec<&str> {
+        let crate::FeatureKind::FrameMember { profile, groups, .. } = self else { return Vec::new() };
+        let mut out: Vec<&str> = Vec::new();
+        for p in std::iter::once(profile).chain(groups.iter().map(|g| &g.profile)) {
+            if let frame::MemberProfile::LibraryProfile { id } = p
+                && !out.contains(&id.as_str())
+            {
+                out.push(id);
+            }
         }
+        out
     }
 }

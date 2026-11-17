@@ -63,7 +63,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .doc_only()
         .contract(&JUNCTIONS_CONTRACT)
         .output(output_schema_for::<JunctionsResult>)
-        .params("feature: a frame member feature (id or name). Returns junctions: [{id, kind: L|I|T|Multi, at: [x,y,z] mm, ends: [[line id, start|end]], span? (the line a T lands on), treatment: none|mitre|butt, gap (mm), butt_cut: square|flush, through?, overridden}]: where its members meet and what each junction gets; frame.member's corner_overrides takes these ids"),
+        .params("feature: a frame member feature (id or name). Returns junctions: [{id, kind: L|I|T|Multi, at: [x,y,z] mm, ends: [[line id, start|end]], span? (the line a T lands on), treatment: none|mitre|butt, gap (mm), butt_cut: square|flush, through?, overridden, between (members of different groups meet)}]: where its members meet and what each junction gets; frame.member's corner_overrides takes these ids"),
     CommandSpec::new("frame.profile.list", "Profile Library", crate::checked!("frame.profile.list", list))
         .icon("library")
         .noundo()
@@ -276,6 +276,14 @@ fn corner_params(s: &Session, cmd: &str, p: &Value) -> Result<(CornerDefaults, B
                 gap_within: gap(c.gap.map(|g| g.0), "corners.gap")?,
                 butt_cut: c.butt_cut.map(Into::into).unwrap_or_default(),
                 butt_through: c.butt_through.map(Into::into).unwrap_or_default(),
+                // Square ends everywhere (`none`) stay square between groups too unless asked.
+                between_groups: c.between_groups.map(Into::into).unwrap_or(if c.treatment == Some(TreatmentParam::None) {
+                    Treatment::None
+                } else {
+                    Treatment::Butt
+                }),
+                gap_between: gap(c.gap_between.map(|g| g.0), "corners.gap_between")?,
+                group_through: c.group_through.map(Into::into).unwrap_or_default(),
             }
         }
     };
@@ -310,6 +318,57 @@ fn corner_params(s: &Session, cmd: &str, p: &Value) -> Result<(CornerDefaults, B
     Ok((corners, overrides))
 }
 
+/// `profiles` as commands read it, for a saved profile selection.
+fn profiles_param(sel: &solidcraft_doc::ProfileSel) -> Value {
+    use solidcraft_doc::ProfileSel;
+    match sel {
+        ProfileSel::All => json!("all"),
+        ProfileSel::Indices { indices } => json!(indices),
+        ProfileSel::Points { points } => json!(points.iter().map(|q| json!({"point": [q.x, q.y]})).collect::<Vec<_>>()),
+        ProfileSel::Curves { loops } => json!(loops.iter().map(|l| json!({"curves": l})).collect::<Vec<_>>()),
+        ProfileSel::OffsetBoundaries { associations } => json!({"type": "offset_boundaries", "associations": associations}),
+        whole @ ProfileSel::WholeBoundaries { .. } => serde_json::to_value(whole).unwrap_or(Value::Null),
+    }
+}
+
+/// `frame.member`'s `groups` for a feature's further groups, as an edit keeps them.
+pub(crate) fn groups_param(groups: &[frame::MemberGroup]) -> Value {
+    let one = |g: &frame::MemberGroup| {
+        let mut out = json!({"id": g.id, "lines": g.lines});
+        match &g.profile {
+            MemberProfile::Library { profile } => {
+                let mut spec = json!({"kind": profile.kind});
+                for (name, e) in &profile.dims {
+                    spec[name] = json!(e);
+                }
+                out["profile"] = spec;
+            }
+            MemberProfile::Sketch { sketch, profiles } => {
+                out["profile_sketch"] = json!(sketch.0);
+                out["profiles"] = profiles_param(profiles);
+            }
+            MemberProfile::LibraryProfile { id } => out["library"] = json!(id),
+        }
+        if let Some(n) = &g.name {
+            out["body_name"] = json!(n);
+        }
+        if !g.anchor.is_origin() {
+            out["anchor"] = json!(g.anchor);
+        }
+        if let Some(pt) = &g.point {
+            out["point"] = json!(pt);
+        }
+        if let Some(a) = &g.angle {
+            out["angle"] = json!(a);
+        }
+        if g.mirror {
+            out["mirror"] = json!(true);
+        }
+        out
+    };
+    json!(groups.iter().map(one).collect::<Vec<_>>())
+}
+
 /// `frame.member`'s `corners` for a feature's corner settings, as an edit keeps them.
 pub(crate) fn corners_param(c: &CornerDefaults) -> Value {
     let mut out = json!({ "treatment": c.within_group });
@@ -321,6 +380,13 @@ pub(crate) fn corners_param(c: &CornerDefaults) -> Value {
     }
     if !c.butt_through.is_longer() {
         out["butt_through"] = json!(c.butt_through);
+    }
+    out["between_groups"] = json!(c.between_groups);
+    if let Some(g) = &c.gap_between {
+        out["gap_between"] = json!(g);
+    }
+    if !c.group_through.is_earlier() {
+        out["group_through"] = json!(c.group_through);
     }
     out
 }
@@ -353,26 +419,33 @@ fn junctions(s: &mut Session, p: &Value) -> Result<Value> {
             butt_cut: if j.butt_cut.is_square() { ButtCutParam::Square } else { ButtCutParam::Flush },
             through: j.through,
             overridden: j.overridden,
+            between: j.between,
         })
         .collect();
     frame_reply(cmd, JunctionsResult { feature: id, junctions })
 }
 
-fn member(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "frame.member";
-    let path_sketch = sketch_id(s, p.get("sketch"), cmd, "sketch")?;
-    let lines = match p.get("lines") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(a)) if !a.is_empty() && a.len() <= frame::MAX_MEMBERS && a.iter().all(Value::is_string) => {
-            let lines = string_list(cmd, p, "lines")?;
-            let mut seen = std::collections::HashSet::new();
-            if let Some(twice) = lines.iter().find(|l| !seen.insert(l.as_str())) {
-                return Err(bad(cmd, format!("line `{twice}` is listed twice")));
-            }
-            lines
-        }
-        Some(_) => Err(bad(cmd, format!("`lines` must list 1…{} curve ids", frame::MAX_MEMBERS)))?,
-    };
+/// One group's member settings as `frame.member` reads them (its own, or a `groups` entry's).
+struct Group {
+    body_name: Option<String>,
+    profile: MemberProfile,
+    default_name: String,
+    anchor: Anchor,
+    locate: Option<[f64; 2]>,
+    point: Option<String>,
+    angle: Option<solidcraft_doc::Expr>,
+    mirror: bool,
+}
+
+/// The group settings in `p`: a name, a profile (`profile`, `profile_sketch` or `library`, whose
+/// whole entry, when given, goes into `library`), the placement point and the turn.
+fn group(
+    s: &Session,
+    cmd: &str,
+    p: &Value,
+    path_sketch: u64,
+    library: &mut Option<Vec<solidcraft_doc::frame_library::LibraryProfile>>,
+) -> Result<Group> {
     let body_name = match p.get("body_name") {
         None | Some(Value::Null) => None,
         Some(_) => Some(
@@ -383,12 +456,20 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
                 .to_string(),
         ),
     };
-    // A whole library profile given as `library` joins the design's library with the member.
-    let mut library = None;
     let (profile, default_name) = match (p.get("profile"), p.get("profile_sketch"), p.get("library")) {
         (None, None, Some(v)) if v.is_object() => {
             let (lib, profile, name) = super::frame_library::member_entry(s, cmd, v)?;
-            library = Some(lib);
+            // Entries another group brought already stay.
+            match library {
+                Some(have) => {
+                    for e in lib {
+                        if !have.iter().any(|h| h.id == e.id) {
+                            have.push(e);
+                        }
+                    }
+                }
+                None => *library = Some(lib),
+            }
             (profile, name)
         }
         (None, None, Some(v)) => {
@@ -458,6 +539,27 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => false,
         Some(_) => bool_(p, "mirror").ok_or_else(|| bad(cmd, "`mirror` must be true or false"))?,
     };
+    Ok(Group { body_name, profile, default_name, anchor, locate, point, angle, mirror })
+}
+
+fn member(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.member";
+    let path_sketch = sketch_id(s, p.get("sketch"), cmd, "sketch")?;
+    let lines = match p.get("lines") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) if !a.is_empty() && a.len() <= frame::MAX_MEMBERS && a.iter().all(Value::is_string) => {
+            let lines = string_list(cmd, p, "lines")?;
+            let mut seen = std::collections::HashSet::new();
+            if let Some(twice) = lines.iter().find(|l| !seen.insert(l.as_str())) {
+                return Err(bad(cmd, format!("line `{twice}` is listed twice")));
+            }
+            lines
+        }
+        Some(_) => Err(bad(cmd, format!("`lines` must list 1…{} curve ids", frame::MAX_MEMBERS)))?,
+    };
+    // A whole library profile given as `library` joins the design's library with the member.
+    let mut library = None;
+    let Group { body_name, profile, default_name, anchor, locate, point, angle, mirror } = group(s, cmd, p, path_sketch, &mut library)?;
     let posts_world_x = match p.get("posts_world_x") {
         None | Some(Value::Null) => false,
         Some(_) => bool_(p, "posts_world_x").ok_or_else(|| bad(cmd, "`posts_world_x` must be true or false"))?,
@@ -474,8 +576,50 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
             .collect::<Result<_>>()?,
         Some(_) => return Err(bad(cmd, format!("`names` must map up to {} line ids to names", frame::MAX_MEMBERS))),
     };
+    let mut groups = Vec::new();
+    let mut bases = vec![body_name.clone().unwrap_or(default_name)];
+    match p.get("groups") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) if a.len() < frame::MAX_GROUPS => {
+            for (k, g) in a.iter().enumerate() {
+                let n = k + 2;
+                let label = |e: crate::EngineError| match e {
+                    crate::EngineError::BadParams { cmd, msg } => crate::EngineError::BadParams { cmd, msg: format!("group {n}: {msg}") },
+                    e => e,
+                };
+                if !g.is_object() {
+                    return Err(bad(cmd, format!("group {n} must be an object with `lines` and a profile")));
+                }
+                let lines = match g.get("lines") {
+                    Some(Value::Array(l)) if !l.is_empty() && l.len() <= frame::MAX_MEMBERS && l.iter().all(Value::is_string) => {
+                        string_list(cmd, g, "lines")?
+                    }
+                    _ => return Err(bad(cmd, format!("group {n}: `lines` must list 1…{} curve ids", frame::MAX_MEMBERS))),
+                };
+                let id = match g.get("id") {
+                    None | Some(Value::Null) => format!("g{n}"),
+                    Some(v) => v
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|i| !i.is_empty() && i.len() <= 64)
+                        .ok_or_else(|| bad(cmd, format!("group {n}: `id` must be 1…64 characters")))?
+                        .to_string(),
+                };
+                if groups.iter().any(|x: &frame::MemberGroup| x.id == id) {
+                    return Err(bad(cmd, format!("group {n}: the id `{id}` is used by another group")));
+                }
+                let Group { body_name, profile, default_name, anchor, locate, point, angle, mirror } =
+                    group(s, cmd, g, path_sketch, &mut library).map_err(label)?;
+                if locate.is_some() {
+                    return Err(bad(cmd, format!("group {n}: `locate` is taken by the first group only (place a group by `point` or `anchor`)")));
+                }
+                bases.push(body_name.clone().unwrap_or(default_name));
+                groups.push(frame::MemberGroup { id, name: body_name, lines, profile, anchor, point, angle, mirror });
+            }
+        }
+        Some(_) => return Err(bad(cmd, format!("`groups` must list up to {} groups", frame::MAX_GROUPS - 1))),
+    }
     let (corners, corner_overrides) = corner_params(s, cmd, p)?;
-    let base = body_name.clone().unwrap_or(default_name);
     let mut kind = FeatureKind::FrameMember {
         path_sketch: SketchId(path_sketch),
         lines,
@@ -490,12 +634,15 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
         corners,
         corner_overrides,
         posts_world_x,
+        groups,
     };
     // Each member's name is pinned to its line as the feature is made, so deleting or adding a
     // line later leaves the other members' names alone.
     let st = s.model.state();
-    let ids = frame::member_line_ids(&st, &kind).map_err(|e| bad(cmd, e.to_string()))?;
-    let pinned: BTreeMap<String, String> = ids.iter().cloned().zip(frame::member_names(&st, &ids, &kept, &base)).collect();
+    let FeatureKind::FrameMember { lines, groups, .. } = &kind else { return Err(bad(cmd, "not a frame member")) };
+    let (ids, group_of) = frame::line_groups_on(&st, path_sketch, lines, groups).map_err(|e| bad(cmd, e.to_string()))?;
+    let bases: Vec<&str> = bases.iter().map(String::as_str).collect();
+    let pinned: BTreeMap<String, String> = ids.iter().cloned().zip(frame::grouped_member_names(&st, &ids, &group_of, &bases, &kept)).collect();
     if let FeatureKind::FrameMember { names, .. } = &mut kind {
         *names = pinned;
     }

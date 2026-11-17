@@ -773,6 +773,11 @@ pub struct FrameMemberKeys {
     /// a vertical member in a flat sketch faces out of it as the horizontal ones do.
     #[serde(default)]
     pub posts_world_x: Option<bool>,
+    /// Further groups of lines, each with its own profile and placement (up to 63). The fields
+    /// above are the first group, which without `lines` takes every line no group lists. Where
+    /// members of different groups meet, `corners.between_groups` applies.
+    #[serde(default)]
+    pub groups: Option<MemberGroups>,
     /// The bodies taking part, which every feature records; each an existing body or `*`. Members
     /// are new bodies, whatever this lists.
     #[serde(default)]
@@ -820,6 +825,75 @@ impl From<ButtCutParam> for solidcraft_doc::frame_corner::ButtCut {
     }
 }
 
+fn group_required(schema: &mut Schema) {
+    require(schema, "lines");
+    let keys = ["profile", "profile_sketch", "library"];
+    let only = |key: &str| {
+        let others: Vec<Value> = keys.iter().filter(|k| **k != key).map(|k| json!({"required": [k]})).collect();
+        json!({"required": [key], "not": {"anyOf": others}})
+    };
+    schema.insert("anyOf".into(), json!(keys.iter().map(|k| only(k)).collect::<Vec<_>>()));
+}
+
+/// One further group of `frame.member`: its lines and its own section and placement, read as
+/// `frame.member`'s own keys are.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields, transform = group_required)]
+pub struct MemberGroupParam {
+    /// Stable through edits (Edit Feature passes it back). Default: `g2`, `g3`… by position.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Its lines, by curve id; a line is in one group at most.
+    #[serde(default)]
+    pub lines: Option<LineIds>,
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ProfileParam")]
+    pub profile: Option<ProfileParam>,
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "SketchRef")]
+    pub profile_sketch: Option<SketchRef>,
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "LibraryKey")]
+    pub library: Option<LibraryKey>,
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ProfilesParam")]
+    pub profiles: Option<ProfilesParam>,
+    #[serde(default)]
+    pub anchor: Option<AnchorParam>,
+    #[serde(default)]
+    pub point: Option<PointName>,
+    #[serde(default)]
+    pub angle: Option<MemberAngle>,
+    #[serde(default)]
+    pub mirror: Option<bool>,
+    /// What this group's members are named after. Default: its profile's description.
+    #[serde(default)]
+    pub body_name: Option<MemberName>,
+}
+
+/// `groups`: up to 63 further groups.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MemberGroups(#[schemars(length(max = 63))] pub Vec<MemberGroupParam>);
+
+/// Which group runs through where groups meet at a butt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupThroughParam {
+    /// The group listed earlier (the feature's own fields first).
+    Earlier,
+    /// The group listed later.
+    Later,
+}
+
+impl From<GroupThroughParam> for solidcraft_doc::frame_corner::GroupThrough {
+    fn from(c: GroupThroughParam) -> Self {
+        match c {
+            GroupThroughParam::Earlier => Self::Earlier,
+            GroupThroughParam::Later => Self::Later,
+        }
+    }
+}
+
 /// Which member runs through at a butt where no override names one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -858,6 +932,16 @@ pub struct CornersParam {
     /// rectangle or a square goes the same way and the other choice swaps them all.
     #[serde(default)]
     pub butt_through: Option<ButtThroughParam>,
+    /// Where members of different groups meet: `butt` (default), `mitre` (two ends at an angle
+    /// only; elsewhere a butt) or `none`.
+    #[serde(default)]
+    pub between_groups: Option<TreatmentParam>,
+    /// The weld gap where groups meet, a length. Default: 0.
+    #[serde(default)]
+    pub gap_between: Option<LengthExpr>,
+    /// Which group runs through where groups meet at a butt: `earlier` (default) or `later`.
+    #[serde(default)]
+    pub group_through: Option<GroupThroughParam>,
 }
 
 /// One junction's settings in `corner_overrides`, each in place of the feature's.
@@ -943,6 +1027,8 @@ pub struct JunctionOut {
     pub through: Option<String>,
     /// It has settings of its own in `corner_overrides`.
     pub overridden: bool,
+    /// Members of different groups meet here (`corners.between_groups` applies).
+    pub between: bool,
 }
 
 /// `frame.junctions`'s result.

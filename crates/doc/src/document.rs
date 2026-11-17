@@ -1495,6 +1495,11 @@ pub enum FeatureKind {
         /// the posts of a frame drawn on an upright plane a quarter turn against its rails.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         posts_world_x: bool,
+        /// Further groups of lines with their own profile and placement (`frame::MemberGroup`);
+        /// the fields above are the first group, which with no `lines` takes every line no other
+        /// group has.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        groups: Vec<crate::frame::MemberGroup>,
     },
     /// Raise or sink profiles on a planar face, or wrap them on a selected cylindrical wall.
     Emboss {
