@@ -485,7 +485,13 @@ adds its one pending format file.
    corner panel (`corner_overrides`). Screenshots in the PR, as AGENTS.md requires.
 5. **Cope**, and multi-member junction ranking.
 6. **Trim/Extend.**
-7. **Cut list** and its export, stable numbers, Browser folder.
+7. **Cut list** and its export, stable numbers, Browser folder. Built on branch
+   `frame-profile-library`: `frame.cut_list` (items grouped by section, both lengths and end
+   cuts either way round; stock per profile; mass from exact volume; CSV and JSON export) and the
+   Cut List window (Weldments › Inspect; picking an item selects its members). Lengths come from
+   the cut planes and the section's exact reach, recomputed from the feature (`member_cuts_report`)
+   rather than recorded on the result. Still to do: stable item numbers kept in the design
+   (`renumber`, `set`), the Browser folder, other weldment bodies, and opposite-hand pairs.
 8. **End caps.** 9. **Gussets.** 10. **Welds.**
 
 Steps 1 and 2 don't depend on 3. Steps 6–10 depend on the end records from step 3.

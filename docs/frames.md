@@ -212,6 +212,21 @@ brings it back, and the feature warns that it isn't used. An edit (`timeline.red
 doesn't give `corners` or `corner_overrides` keeps the feature's. A feature saved before corners
 existed has none: its members keep their square ends.
 
+## Cut list
+
+**Cut List** (Weldments › Inspect) lists what to cut: one item per set of identical members (same
+section, lengths and end cuts, either way round; groups with different profiles stay apart), with
+its quantity, the longest and shortest length along the member, the angle of each end cut from
+square, the material and the mass of one piece. Below it, each profile's pieces and total length
+(what to order) and the total mass. Picking an item selects its members; **Export CSV…** and
+**Export JSON…** write the list.
+
+Lengths come from each member's line, its section and the exact cut planes at its ends, not from
+a mesh: the longest length is the far points of the two cuts, the shortest what a saw marks for a
+mitre (a mitred 40 mm tube on a 600 mm line is 640 long and 560 short). Mass is the body's exact
+volume times its material's density. Item numbers follow the order of the list (by profile, then
+longest first); numbers kept in the design are a later step.
+
 ## frame.member
 
 - `sketch`: the frame sketch. `lines`: the curve ids to lay members on (2D lines or 3D sketch
@@ -385,6 +400,12 @@ given larger than the room for it.
 
 ## Commands
 
+- `frame.cut_list` `{feature?, format?: json|csv, path?}`: the cut list of one frame member
+  feature or of all of them: `items` (`item`, `quantity`, `description`, `length` and
+  `short_length` in mm, `ends` with each cut's `angle` from square and `towards` (the direction in
+  the profile's x and y it leans to, degrees), `material`, `mass_each_g`, `members` by body name),
+  `stock` (each profile's `pieces` and `total_length`) and `total_mass_g`; `format: csv` adds the
+  list as `csv` text, and `path` writes it to a `.csv` or `.json` file.
 - `frame.junctions` `{feature}`: a frame member feature's junctions: `id`, `kind` (L, I, T,
   Multi), `at`, the member `ends` that meet (`[line id, start|end]`), `span` (the line a T lands
   on), and what it gets (`treatment`, `gap`, `butt_cut`, `through`, `overridden`, and `between`

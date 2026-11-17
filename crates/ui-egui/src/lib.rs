@@ -40,6 +40,7 @@ mod control_joint_pose;
 mod control_params;
 pub mod control_switch;
 pub mod crash_ui;
+pub mod cut_list_panel;
 pub mod deferred;
 pub mod delete;
 pub mod design_properties;
@@ -709,6 +710,8 @@ pub struct SolveApp {
     pub kicad_import: Option<kicad_import_dialog::Dialog>,
     /// The Bill of Materials window, when open.
     pub bom: Option<bom_panel::BomPanel>,
+    /// The Cut List window, when open.
+    pub cut_list: Option<cut_list_panel::CutListPanel>,
     material_card_review: Option<material_card_review::ReviewWindow>,
     /// Context menus, rename box and Properties window.
     pub menu: context_menu::MenuState,
@@ -1077,6 +1080,7 @@ impl SolveApp {
             sketch_report: None,
             kicad_import: None,
             bom: None,
+            cut_list: None,
             material_card_review: None,
             menu: context_menu::MenuState::default(),
             gesture: mouse_gesture::State::default(),
@@ -2631,6 +2635,10 @@ impl SolveApp {
             } else {
                 bom_panel::open(self);
             }
+            return;
+        }
+        if id == "frame.cut_list" {
+            cut_list_panel::open(self);
             return;
         }
         // Inspect → Measure → Properties: the window, not a reply nobody sees (#8095).
@@ -4284,6 +4292,7 @@ impl SolveApp {
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
         sketch_report::show(self, ui.ctx());
+        cut_list_panel::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         mesh_units::show(self, ui.ctx());

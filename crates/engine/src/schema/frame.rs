@@ -1038,6 +1038,86 @@ pub struct JunctionsResult {
     pub junctions: Vec<JunctionOut>,
 }
 
+/// `frame.cut_list`'s parameters.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CutListParams {
+    /// One frame member feature, by id or name. Default: every frame member feature that isn't
+    /// suppressed.
+    #[serde(default)]
+    pub feature: Option<super::edit::FeatureRef>,
+    /// `csv` also gives the list as comma-separated text (`csv`); with `path`, the file's format.
+    /// Default: `json` only, or as `path` ends.
+    #[serde(default)]
+    pub format: Option<CutListFormat>,
+    /// Also write the list to this file: `.csv` (or `format: csv`) or `.json`.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// How `frame.cut_list` gives the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CutListFormat {
+    Json,
+    Csv,
+}
+
+/// One end of a cut-list item.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct CutEnd {
+    /// How far the cut leans from square (degrees; 0: square).
+    pub angle: f64,
+    /// Which way, as a direction in the profile's own x and y (degrees from +x).
+    pub towards: f64,
+}
+
+/// One cut-list item: identical members (same section, lengths and end cuts, either way round).
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct CutItem {
+    /// 1, 2, …: by description, then longest first.
+    pub item: usize,
+    pub quantity: usize,
+    /// The profile's description (`Rect Tube 40x40x3`).
+    pub description: String,
+    /// The longest extent along the member (mm).
+    pub length: f64,
+    /// The shortest extent along the member (mm), what a saw marks for a mitre.
+    pub short_length: f64,
+    /// Its two ends, the more leaning first.
+    pub ends: [CutEnd; 2],
+    /// The members' material.
+    pub material: String,
+    /// One member's mass (g), when its body is a closed solid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mass_each_g: Option<f64>,
+    /// The members, by body name.
+    pub members: Vec<String>,
+}
+
+/// The total length of one profile, what a shop orders.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct CutStock {
+    pub description: String,
+    pub pieces: usize,
+    /// mm, the longest lengths added up.
+    pub total_length: f64,
+}
+
+/// `frame.cut_list`'s result.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CutListResult {
+    pub items: Vec<CutItem>,
+    pub stock: Vec<CutStock>,
+    /// Every member's mass added up (g); members whose mass isn't known are left out.
+    pub total_mass_g: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub csv: Option<String>,
+    /// The file written, with `path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 /// `frame.member`'s parameters: [`FrameMemberKeys`], reading the section's keys only as the
 /// handler does (see the module docs).
 #[derive(Debug)]

@@ -30,15 +30,10 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
     let FeatureKind::FrameMember { names, corners, corner_overrides, .. } = &f.kind else {
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
-    let Layout { segments, group_of, sections, turns, normal } = layout(doc, vals, f, st)?;
-    let mut placed = Vec::with_capacity(segments.len());
-    for (l, g) in segments.iter().zip(&group_of) {
-        let (regions, at, turn, _, centre) = sections.get(*g).ok_or_else(|| DocError::Invalid(format!("line `{}`: no group {g}", l.id)))?;
-        let plane = member_plane(l.a, l.b, *turn, *at, *centre, turns.get(&l.id).copied(), normal)
-            .ok_or_else(|| DocError::Invalid(format!("line `{}`: no plane square to it", l.id)))?;
-        placed.push(placed_on(l, &plane, regions));
-    }
-    let cuts = corner_cuts(vals, &segments, &group_of, &placed, corners, corner_overrides, warning)?;
+    let prepared = prepare(doc, vals, f, st)?;
+    let Prepared { segments, group_of, sections, .. } = &prepared;
+    let placed = prepared.placed()?;
+    let cuts = corner_cuts(vals, segments, group_of, &placed, corners, corner_overrides, warning)?;
     let mut made = Vec::with_capacity(segments.len());
     for ((l, p), c) in segments.iter().zip(&placed).zip(cuts) {
         let id = &l.id;
@@ -70,30 +65,57 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
         return Ok(());
     }
     // Named per group, after its name or profile; a pinned name holds across groups.
-    let ids: Vec<String> = segments.into_iter().map(|l| l.id).collect();
-    let bases: Vec<&str> = sections.iter().map(|(_, _, _, base, _)| base.as_str()).collect();
-    let taken = grouped_member_names(st, &ids, &group_of, &bases, names);
+    let ids: Vec<String> = segments.iter().map(|l| l.id.clone()).collect();
+    let bases: Vec<&str> = sections.iter().map(|g| g.base.as_str()).collect();
+    let taken = grouped_member_names(st, &ids, group_of, &bases, names);
     for (name, t) in taken.into_iter().zip(made) {
         st.bodies.push(ModelBody::traced_new(name, t, f.id));
     }
     Ok(())
 }
 
-/// A member feature's lines (in its component frame), the group of each, each group's section as
-/// placed (regions, the point on the line, its turn about the line, what its members are named
-/// after, and the profile point a Rotate step turns it about: the centre of its bounding box), each
-/// line's further turn (radians) from the Rotate steps after the feature ([`member_turns`]: a step
-/// whose angle fails is passed over), and a flat frame sketch's normal, which sets which way its
-/// posts face (none for a 3D sketch or with `posts_world_x`).
-struct Layout {
+/// A group's section as its members take it.
+struct GroupSection {
+    regions: Vec<Region2>,
+    at: Vec2,
+    turn: f64,
+    /// The profile point a Rotate step turns its members about: the centre of its bounding box.
+    centre: Vec2,
+    /// What its members are named after.
+    base: String,
+    /// The profile's own description (`Rect Tube 40x40x3`).
+    description: String,
+    /// Members of groups with the same key have the same section: the library profile, the
+    /// built-in profile as resolved, or the sketch profiles; and the mirror.
+    key: String,
+}
+
+/// A frame member feature's lines, groups and sections, ready to place.
+struct Prepared {
     segments: Vec<MemberLine>,
     group_of: Vec<usize>,
-    sections: Vec<(Vec<Region2>, Vec2, f64, String, Vec2)>,
+    sections: Vec<GroupSection>,
+    /// Each line's further turn (radians) from the Rotate steps after the feature
+    /// ([`member_turns`]: a step whose angle fails is passed over).
     turns: BTreeMap<String, f64>,
     normal: Option<Vec3>,
 }
 
-fn layout(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState) -> Result<Layout> {
+impl Prepared {
+    fn placed(&self) -> Result<Vec<frame_corner::Placed<'_>>> {
+        let mut placed = Vec::with_capacity(self.segments.len());
+        for (l, g) in self.segments.iter().zip(&self.group_of) {
+            let s = self.sections.get(*g).ok_or_else(|| DocError::Invalid(format!("line `{}`: no group {g}", l.id)))?;
+            let plane = member_plane(l.a, l.b, s.turn, s.at, s.centre, self.turns.get(&l.id).copied(), self.normal)
+                .ok_or_else(|| DocError::Invalid(format!("line `{}`: no plane square to it", l.id)))?;
+            placed.push(placed_on(l, &plane, &s.regions));
+        }
+        Ok(placed)
+    }
+}
+
+/// Work out feature `f`'s member lines (by group) and each group's section as placed.
+fn prepare(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState) -> Result<Prepared> {
     let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, posts_world_x, groups, .. } =
         &f.kind
     else {
@@ -118,19 +140,26 @@ fn layout(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &Mode
     for (k, g) in std::iter::once(own).chain(groups.iter().map(GroupSpec::of)).enumerate() {
         let label = |e: DocError| if k == 0 { e } else { DocError::Invalid(format!("group {}: {e}", k + 1)) };
         let section = profile_regions(doc, vals, st, g.profile).map_err(label)?;
-        let base = g.name.map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| section.description.clone(), str::to_string);
+        let description = section.description.clone();
+        let base = g.name.map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| description.clone(), str::to_string);
+        let source = match g.profile {
+            MemberProfile::LibraryProfile { id } => format!("library:{id}"),
+            MemberProfile::Library { .. } => format!("builtin:{description}"),
+            MemberProfile::Sketch { sketch, profiles } => format!("sketch:{}:{}", sketch.0, serde_json::to_string(profiles).unwrap_or_default()),
+        };
+        let key = format!("{source}|{}", if g.mirror { "mirrored" } else { "" });
         let (regions, at) = placed_section(section, g.anchor, g.point, g.locate, g.mirror).map_err(label)?;
         let turn = match g.angle {
             Some(e) => val(vals, e, Kind::Angle).map_err(label)?,
             None => 0.0,
         };
         let centre = frame::anchor_point(&regions, frame::Anchor::Center);
-        sections.push((regions, at, turn, base, centre));
+        sections.push(GroupSection { regions, at, turn, centre, base, description, key });
     }
     let turns = member_turns(doc, vals, FeatureId(f.id)).into_iter().map(|(line, (_, a))| (line, a)).collect();
     // A flat sketch's normal sets which way its posts face; a 3D sketch has none.
     let normal = (ps.sketch.wires.is_empty() && !*posts_world_x).then(|| mapped.plane.x.cross(mapped.plane.y));
-    Ok(Layout { segments, group_of, sections, turns, normal })
+    Ok(Prepared { segments, group_of, sections, turns, normal })
 }
 
 /// The plane a member's profile is laid in at `a`, square to the line on to `b`: profile point
@@ -153,8 +182,9 @@ fn placed_on<'a>(l: &MemberLine, plane: &Plane, regions: &'a [Region2]) -> frame
     frame_corner::Placed { a: l.a, b: l.b, x: plane.x, y: plane.y, at: Vec2::new(d.dot(plane.x), d.dot(plane.y)), regions }
 }
 
-/// The member of feature `f` on line `line`, as its body was made: the plane square to the line
-/// at its start (x × y along the line), its length, and its profile in that plane.
+/// The member of feature `f` on line `line`, as its body was made before its corners are cut: the
+/// plane square to the line at its start (x × y along the line), its length, and its profile in
+/// that plane.
 pub(crate) fn member_section(
     doc: &Document,
     vals: &BTreeMap<String, Value>,
@@ -162,14 +192,122 @@ pub(crate) fn member_section(
     st: &ModelState,
     line: &str,
 ) -> Result<(Plane, f64, Region2)> {
-    let Layout { segments, group_of, sections, turns, normal } = layout(doc, vals, f, st)?;
-    let k = segments.iter().position(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
-    let (l, g) = (&segments[k], group_of.get(k).copied().unwrap_or(0));
-    let (regions, at, turn, _, centre) = sections.get(g).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no group {g}")))?;
-    let plane = member_plane(l.a, l.b, *turn, *at, *centre, turns.get(line).copied(), normal)
-        .ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
-    let region = regions.first().cloned().ok_or_else(|| DocError::Invalid("the member profile has no area".into()))?;
+    let prepared = prepare(doc, vals, f, st)?;
+    let placed = prepared.placed()?;
+    let k = prepared.segments.iter().position(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
+    let (Some(l), Some(p)) = (prepared.segments.get(k), placed.get(k)) else {
+        return Err(DocError::Unknown(format!("line `{line}` of the member feature")));
+    };
+    let plane =
+        Plane::new(l.a - p.x * p.at.x - p.y * p.at.y, p.x, p.y).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
+    let region = p.regions.first().cloned().ok_or_else(|| DocError::Invalid("the member profile has no area".into()))?;
     Ok((plane, l.a.dist(l.b), region))
+}
+
+/// One end cut of a member as the cut list gives it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct EndCut {
+    /// How far the cut leans from square to the member (degrees; 0: a square end).
+    pub angle: f64,
+    /// Which way it leans, as a direction in the profile's own x and y (degrees from +x; 0 for a
+    /// square end): the cut reaches furthest along the member on that side.
+    pub towards: f64,
+}
+
+/// One member of a frame member feature as the cut list takes it, worked out from its line, its
+/// section and the exact cut planes at its ends.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct MemberCut {
+    pub line: String,
+    /// Its group (0: the feature's own fields).
+    pub group: usize,
+    /// Members with the same key have the same section (see the cut list's grouping).
+    pub profile_key: String,
+    pub description: String,
+    /// The longest extent along its line (mm).
+    pub length: f64,
+    /// The shortest extent along its line (mm), what a saw marks for a mitre.
+    pub short_length: f64,
+    /// The cuts at its start and at its end, the most leaning first; none: a square end.
+    pub ends: [Vec<EndCut>; 2],
+}
+
+/// The members of frame member feature `f` as built in `st`: each one's lengths and end cuts, in
+/// the order the feature makes its bodies.
+pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Result<Vec<MemberCut>> {
+    let FeatureKind::FrameMember { corners, corner_overrides, .. } = &f.kind else {
+        return Err(DocError::Invalid("not a frame member feature".into()));
+    };
+    let (vals, _) = doc.param_values();
+    let prepared = prepare(doc, &vals, f, st)?;
+    let placed = prepared.placed()?;
+    let mut ignored = None;
+    let cuts = corner_cuts(&vals, &prepared.segments, &prepared.group_of, &placed, corners, corner_overrides, &mut ignored)?;
+    let mut out = Vec::with_capacity(placed.len());
+    for (((l, p), c), g) in prepared.segments.iter().zip(&placed).zip(&cuts).zip(&prepared.group_of) {
+        let len = l.a.dist(l.b);
+        let d = (l.b - l.a).normalized().ok_or_else(|| DocError::Invalid(format!("line `{}` has no length", l.id)))?;
+        // Each end's planes; a square end is the plane square to the line at the end.
+        let planes = |end: frame_corner::End| -> Vec<frame_corner::Cut> {
+            let mine: Vec<frame_corner::Cut> = c.cuts.iter().filter(|(e, _, _)| *e == end).map(|(_, _, cut)| *cut).collect();
+            if !mine.is_empty() {
+                return mine;
+            }
+            match end {
+                frame_corner::End::Start => vec![frame_corner::Cut { origin: l.a, normal: d }],
+                frame_corner::End::End => vec![frame_corner::Cut { origin: l.b, normal: -d }],
+            }
+        };
+        let (starts, ends) = (planes(frame_corner::End::Start), planes(frame_corner::End::End));
+        // Along the line, a section point r (square to it) is kept from t_s(r) to t_e(r), each
+        // affine in r: the length there is C + r·w, so its extremes are the section's reach.
+        let (mut longest, mut shortest) = (f64::INFINITY, f64::INFINITY);
+        for s in &starts {
+            for e in &ends {
+                let (ds, de) = (d.dot(s.normal), d.dot(e.normal));
+                if ds.abs() < 1e-12 || de.abs() < 1e-12 {
+                    continue;
+                }
+                let c0 = (e.origin - l.a).dot(e.normal) / de - (s.origin - l.a).dot(s.normal) / ds;
+                let w = s.normal * (1.0 / ds) - e.normal * (1.0 / de);
+                longest = longest.min(c0 + p.reach(w));
+                shortest = shortest.min(c0 - p.reach(-w));
+            }
+        }
+        if !longest.is_finite() || !shortest.is_finite() {
+            longest = len;
+            shortest = len;
+        }
+        let end_cuts = |cuts: &[frame_corner::Cut], square: Vec3| -> Vec<EndCut> {
+            let mut out: Vec<EndCut> = cuts
+                .iter()
+                .filter_map(|cut| {
+                    let along = cut.normal.dot(square).clamp(-1.0, 1.0);
+                    let angle = along.acos().to_degrees();
+                    if angle < 1e-9 {
+                        return None;
+                    }
+                    // The cut reaches furthest along the member where its normal leans away.
+                    let lean = -(cut.normal - d * cut.normal.dot(d));
+                    let towards = lean.dot(p.y).atan2(lean.dot(p.x)).to_degrees().rem_euclid(360.0) + 0.0;
+                    Some(EndCut { angle, towards })
+                })
+                .collect();
+            out.sort_by(|a, b| b.angle.total_cmp(&a.angle));
+            out
+        };
+        let section = prepared.sections.get(*g);
+        out.push(MemberCut {
+            line: l.id.clone(),
+            group: *g,
+            profile_key: section.map(|s| s.key.clone()).unwrap_or_default(),
+            description: section.map(|s| s.description.clone()).unwrap_or_default(),
+            length: longest,
+            short_length: shortest,
+            ends: [end_cuts(&starts, d), end_cuts(&ends, -d)],
+        });
+    }
+    Ok(out)
 }
 
 /// A group's member settings: the feature's own fields or a `MemberGroup`'s.
@@ -385,13 +523,13 @@ pub(super) fn junctions_of(lines: &[MemberLine]) -> Vec<frame_corner::Junction> 
 /// The point member `line` of `f` turns about, halfway along it: the centre of the profile's
 /// bounding box, which a Rotate step's turn leaves where it is ([`member_plane`]).
 pub(crate) fn member_pivot(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState, line: &str) -> Result<Vec3> {
-    let Layout { segments, group_of, sections, normal, .. } = layout(doc, vals, f, st)?;
+    let Prepared { segments, group_of, sections, normal, .. } = prepare(doc, vals, f, st)?;
     let k = segments.iter().position(|l| l.id == line).ok_or_else(|| DocError::Unknown(format!("line `{line}` of the member feature")))?;
     let (l, g) = (&segments[k], group_of.get(k).copied().unwrap_or(0));
-    let (_, at, turn, _, centre) = sections.get(g).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no group {g}")))?;
-    let plane = member_plane(l.a, l.b, *turn, *at, *centre, None, normal)
+    let s = sections.get(g).ok_or_else(|| DocError::Invalid(format!("line `{line}`: no group {g}")))?;
+    let plane = member_plane(l.a, l.b, s.turn, s.at, s.centre, None, normal)
         .ok_or_else(|| DocError::Invalid(format!("line `{line}`: no plane square to it")))?;
-    Ok(plane.origin + plane.x * centre.x + plane.y * centre.y + (l.b - l.a) * 0.5)
+    Ok(plane.origin + plane.x * s.centre.x + plane.y * s.centre.y + (l.b - l.a) * 0.5)
 }
 
 /// The body name of the member on each of `lines`: its own name from `pinned` (by line id) when no

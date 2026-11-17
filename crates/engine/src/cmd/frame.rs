@@ -21,9 +21,10 @@ use super::{CommandSpec, in_sketch, not_in_sketch};
 use crate::params::{bad, bool_, expr, num, str_, string_list, vec2};
 use crate::schema::features::FeatureResult;
 use crate::schema::frame::{
-    ButtCutParam, CornerOverrides, CornersParam, CreatedIds, FrameMemberParams, JunctionOut, JunctionsParams, JunctionsResult, LineId,
-    ProfileInsertParams, ProfileInsertResult, ProfileKindInfo, ProfileListParams, ProfileListResult, ProfileOut, ProfilePropertiesParams,
-    ProfilePropertiesResult, ProfileSection, SizeFamilyInfo, TreatmentParam,
+    ButtCutParam, CornerOverrides, CornersParam, CreatedIds, CutEnd, CutItem, CutListFormat, CutListParams, CutListResult, CutStock,
+    FrameMemberParams, JunctionOut, JunctionsParams, JunctionsResult, LineId, ProfileInsertParams, ProfileInsertResult, ProfileKindInfo,
+    ProfileListParams, ProfileListResult, ProfileOut, ProfilePropertiesParams, ProfilePropertiesResult, ProfileSection, SizeFamilyInfo,
+    TreatmentParam,
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
@@ -37,6 +38,7 @@ const LIST_CONTRACT: TypedContract<ProfileListParams> = TypedContract::new();
 const PROPERTIES_CONTRACT: TypedContract<ProfilePropertiesParams> = TypedContract::new();
 const INSERT_CONTRACT: TypedContract<ProfileInsertParams> = TypedContract::new();
 const JUNCTIONS_CONTRACT: TypedContract<JunctionsParams> = TypedContract::new();
+const CUT_LIST_CONTRACT: TypedContract<CutListParams> = TypedContract::new();
 
 /// The profile parameter, as every frame command documents it.
 macro_rules! profile_doc {
@@ -64,6 +66,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&JUNCTIONS_CONTRACT)
         .output(output_schema_for::<JunctionsResult>)
         .params("feature: a frame member feature (id or name). Returns junctions: [{id, kind: L|I|T|Multi, at: [x,y,z] mm, ends: [[line id, start|end]], span? (the line a T lands on), treatment: none|mitre|butt, gap (mm), butt_cut: square|flush, through?, overridden, between (members of different groups meet)}]: where its members meet and what each junction gets; frame.member's corner_overrides takes these ids"),
+    CommandSpec::new("frame.cut_list", "Cut List", crate::checked!("frame.cut_list", cut_list))
+        .at("WELDMENTS", "INSPECT")
+        .icon("bom")
+        .noundo()
+        .doc_only()
+        .contract(&CUT_LIST_CONTRACT)
+        .output(output_schema_for::<CutListResult>)
+        .params("feature?: a frame member feature (id or name; default every one); format?: json|csv (csv adds the list as text); path?: also write it to a .csv or .json file. Returns items: [{item, quantity, description, length (longest, mm), short_length (mm), ends: [{angle (deg from square), towards (deg in the profile's x/y)}, …2], material, mass_each_g?, members: [body names]}] (identical members together, either way round), stock: [{description, pieces, total_length}], total_mass_g, csv?, path?"),
     CommandSpec::new("frame.profile.list", "Profile Library", crate::checked!("frame.profile.list", list))
         .icon("library")
         .noundo()
@@ -387,6 +397,148 @@ pub(crate) fn corners_param(c: &CornerDefaults) -> Value {
     }
     if !c.group_through.is_earlier() {
         out["group_through"] = json!(c.group_through);
+    }
+    out
+}
+
+/// Most members a cut list takes.
+const MAX_CUT_MEMBERS: usize = 20_000;
+
+fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.cut_list";
+    let a: CutListParams = crate::schema::frame_library::typed(cmd, p)?;
+    let features: Vec<u64> = match &a.feature {
+        Some(f) => {
+            let id = super::edit::feature_id(s, Some(&f.0), cmd)?;
+            match s.doc.feature(id) {
+                Some(f) if matches!(f.kind, FeatureKind::FrameMember { .. }) => vec![id],
+                Some(f) => return Err(bad(cmd, format!("{} is not a frame member feature", f.name))),
+                None => return Err(bad(cmd, format!("no feature {id}"))),
+            }
+        }
+        None => s.doc.features.iter().filter(|f| !f.suppressed && matches!(f.kind, FeatureKind::FrameMember { .. })).map(|f| f.id).collect(),
+    };
+    let st = s.model.state();
+    // Each member: its cut, body name, material and mass.
+    let mut members: Vec<(frame::MemberCut, String, String, Option<f64>)> = Vec::new();
+    for id in features {
+        let Some(f) = s.doc.feature(id) else { continue };
+        let cuts = frame::member_cuts_report(&s.doc, &st, f).map_err(|e| bad(cmd, format!("{}: {e}", f.name)))?;
+        let bodies: Vec<&solidcraft_doc::ModelBody> = st.bodies.iter().filter(|b| b.feature == id).collect();
+        for (k, c) in cuts.into_iter().enumerate() {
+            let Some(body) = bodies.get(k) else { continue };
+            let material = s.doc.body_material(&body.name);
+            let mass = body
+                .measure()
+                .ok()
+                .filter(|_| super::inspect::encloses_volume(&body.body))
+                .map(|m| m.volume * s.doc.density(&body.name) / 1000.0)
+                .filter(|m| m.is_finite());
+            members.push((c, body.name.clone(), material, mass));
+            if members.len() > MAX_CUT_MEMBERS {
+                return Err(bad(cmd, format!("at most {MAX_CUT_MEMBERS} members in a cut list")));
+            }
+        }
+    }
+    // Identical members share a key: the section, both lengths and the two ends either way round.
+    // Rounded to what the list shows past its last digit, with −0 and 360° read as 0.
+    let rounded = |v: f64, places: i32| {
+        let k = 10f64.powi(places);
+        (v * k).round() / k + 0.0
+    };
+    let end_key = |e: &[frame::EndCut]| {
+        e.first().map_or_else(|| "square".to_string(), |c| format!("{}@{}", rounded(c.angle, 4), rounded(c.towards, 3).rem_euclid(360.0) + 0.0))
+    };
+    let mut items: Vec<CutItem> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    for (c, name, material, mass) in members {
+        let mut ends = [end_key(&c.ends[0]), end_key(&c.ends[1])];
+        ends.sort();
+        let key = format!("{}|{}|{}|{}|{}|{material}", c.profile_key, rounded(c.length, 4), rounded(c.short_length, 4), ends[0], ends[1]);
+        if let Some(k) = keys.iter().position(|x| *x == key)
+            && let Some(item) = items.get_mut(k)
+        {
+            item.quantity += 1;
+            item.members.push(name);
+            continue;
+        }
+        let end = |e: &[frame::EndCut]| e.first().map_or(CutEnd { angle: 0.0, towards: 0.0 }, |c| CutEnd { angle: c.angle, towards: c.towards });
+        let mut pair = [end(&c.ends[0]), end(&c.ends[1])];
+        if pair[1].angle > pair[0].angle {
+            pair.swap(0, 1);
+        }
+        keys.push(key);
+        items.push(CutItem {
+            item: 0,
+            quantity: 1,
+            description: c.description,
+            length: c.length,
+            short_length: c.short_length,
+            ends: pair,
+            material,
+            mass_each_g: mass,
+            members: vec![name],
+        });
+    }
+    items.sort_by(|x, y| x.description.cmp(&y.description).then(y.length.total_cmp(&x.length)));
+    for (k, item) in items.iter_mut().enumerate() {
+        item.item = k + 1;
+    }
+    let mut stock: Vec<CutStock> = Vec::new();
+    for item in &items {
+        match stock.iter_mut().find(|s| s.description == item.description) {
+            Some(s) => {
+                s.pieces += item.quantity;
+                s.total_length += item.length * item.quantity as f64;
+            }
+            None => stock.push(CutStock {
+                description: item.description.clone(),
+                pieces: item.quantity,
+                total_length: item.length * item.quantity as f64,
+            }),
+        }
+    }
+    let total_mass_g = items.iter().filter_map(|i| i.mass_each_g.map(|m| m * i.quantity as f64)).sum();
+    let csv = (a.format == Some(CutListFormat::Csv) && a.path.is_none()).then(|| cut_list_csv(&items));
+    let mut out = CutListResult { items, stock, total_mass_g, csv, path: None };
+    if let Some(path) = a.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let lower = path.to_ascii_lowercase();
+        let as_csv = match a.format {
+            Some(f) => f == CutListFormat::Csv,
+            None if lower.ends_with(".csv") => true,
+            None if lower.ends_with(".json") => false,
+            None => return Err(bad(cmd, "`path` must end in .csv or .json, or give `format`")),
+        };
+        let text = if as_csv { cut_list_csv(&out.items) } else { serde_json::to_string_pretty(&out).map_err(|e| bad(cmd, e.to_string()))? };
+        solidcraft_io::vfs::write(path, text.as_bytes()).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
+        out.path = Some(path.to_string());
+    }
+    frame_reply(cmd, out)
+}
+
+/// The cut list as comma-separated text, a header line first; lengths in mm, angles in degrees,
+/// masses in kg.
+pub(crate) fn cut_list_csv(items: &[CutItem]) -> String {
+    let field = |t: &str| if t.contains([',', '"', '\n']) { format!("\"{}\"", t.replace('"', "\"\"")) } else { t.to_string() };
+    let mut out = String::from(
+        "Item,Qty,Description,Length (mm),Short length (mm),Angle 1 (deg),Angle 2 (deg),Material,Mass each (kg),Total mass (kg),Members\n",
+    );
+    for i in items {
+        let mass = |m: Option<f64>| m.map_or_else(String::new, |m| format!("{:.3}", m / 1000.0));
+        out.push_str(&format!(
+            "{},{},{},{:.2},{:.2},{:.2},{:.2},{},{},{},{}\n",
+            i.item,
+            i.quantity,
+            field(&i.description),
+            i.length,
+            i.short_length,
+            i.ends[0].angle,
+            i.ends[1].angle,
+            field(&i.material),
+            mass(i.mass_each_g),
+            mass(i.mass_each_g.map(|m| m * i.quantity as f64)),
+            field(&i.members.join(" ")),
+        ));
     }
     out
 }

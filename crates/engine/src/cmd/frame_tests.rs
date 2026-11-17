@@ -1951,3 +1951,51 @@ fn bad_groups_are_refused_with_the_reason() {
     assert!(e.contains("`a`"), "{e}");
     assert!(s.doc.features.iter().all(|f| !matches!(f.kind, solidcraft_doc::FeatureKind::FrameMember { .. })), "nothing was made");
 }
+
+#[test]
+fn the_cut_list_groups_identical_members_with_their_lengths_and_end_angles() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube()}))["feature"].clone();
+    let list = run(&mut s, "frame.cut_list", json!({"format": "csv"}));
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{list}");
+    // Mitred 40 mm tube: the outside runs 2 × 20 past each corner, the inside stops 2 × 20 short.
+    let close = |v: &Value, want: f64| (f(v) - want).abs() < 1e-6;
+    let (rails, posts) = (&items[0], &items[1]);
+    assert!(close(&rails["length"], 640.0) && close(&rails["short_length"], 560.0) && rails["quantity"] == 2, "{rails}");
+    assert!(close(&posts["length"], 440.0) && close(&posts["short_length"], 360.0) && posts["quantity"] == 2, "{posts}");
+    assert!(items.iter().all(|i| close(&i["ends"][0]["angle"], 45.0) && close(&i["ends"][1]["angle"], 45.0)), "{list}");
+    assert!(close(&list["stock"][0]["total_length"], 2.0 * 640.0 + 2.0 * 440.0) && list["stock"][0]["pieces"] == 4, "{list}");
+    let each: f64 = items.iter().map(|i| f(&i["mass_each_g"]) * f(&i["quantity"])).sum();
+    assert!(each > 0.0 && (f(&list["total_mass_g"]) - each).abs() < 1e-6, "{list}");
+    let csv = list["csv"].as_str().unwrap();
+    assert!(csv.starts_with("Item,Qty,Description,Length (mm)") && csv.lines().count() == 3, "{csv}");
+    assert!(csv.lines().nth(1).unwrap().starts_with("1,2,Rect Tube 40x40x3,640.00,560.00,45.00,45.00,"), "{csv}");
+    // Butted with a gap: square ends; the rails run through, the posts stop 3 mm short each end.
+    run(
+        &mut s,
+        "timeline.redefine",
+        json!({"feature": fid.clone(), "command": "frame.member", "params": {"sketch": "Frame", "profile": tube(), "corners": {"treatment": "butt", "gap": 3}}}),
+    );
+    let list = run(&mut s, "frame.cut_list", json!({"feature": fid}));
+    let items = list["items"].as_array().unwrap();
+    assert!(close(&items[0]["length"], 640.0) && close(&items[0]["short_length"], 640.0), "{list}");
+    assert!(close(&items[1]["length"], 354.0) && close(&items[1]["ends"][0]["angle"], 0.0), "{list}");
+    assert!(list.get("csv").is_none());
+}
+
+#[test]
+fn the_cut_list_keeps_groups_apart_and_lists_each_profiles_stock() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines = rectangle_lines(&s);
+    let short: Vec<String> = lines.iter().filter(|(_, axis)| *axis == 1).map(|(id, _)| id.clone()).collect();
+    let post = json!({"kind": "rect_tube", "width": 60, "height": 30, "wall": 3});
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "groups": [{"lines": short, "profile": post}]}));
+    let list = run(&mut s, "frame.cut_list", json!({}));
+    assert_eq!(list["items"].as_array().unwrap().len(), 2, "{list}");
+    let stock: Vec<&str> = list["stock"].as_array().unwrap().iter().map(|x| x["description"].as_str().unwrap()).collect();
+    assert_eq!(stock, ["Rect Tube 40x40x3", "Rect Tube 60x30x3"], "{list}");
+    assert!(s.execute("frame.cut_list", &json!({"feature": "Frame"})).unwrap_err().to_string().contains("not a frame member"));
+}

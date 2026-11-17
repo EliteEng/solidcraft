@@ -570,6 +570,8 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "WELDMENTS", panel: "SKETCH", promoted: 1, ids: &["sketch.create"] },
     Section { tab: "WELDMENTS", panel: "CREATE", promoted: 2, ids: &["frame.member", "frame.end_cap"] },
     Section { tab: "WELDMENTS", panel: "MODIFY", promoted: 1, ids: &["frame.rotate_member"] },
+    // What to cut: identical members together, with their lengths and end angles.
+    Section { tab: "WELDMENTS", panel: "INSPECT", promoted: 1, ids: &["frame.cut_list"] },
     Section { tab: "WELDMENTS", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
 ];
 
@@ -1518,7 +1520,7 @@ mod tests {
     #[test]
     fn weldments_tab_holds_frame_member_and_follows_a_member_body() {
         let specs = solidcraft_engine::command_specs();
-        assert_eq!(panels("WELDMENTS"), ["SKETCH", "CREATE", "MODIFY", "CONFIGURE"]);
+        assert_eq!(panels("WELDMENTS"), ["SKETCH", "CREATE", "MODIFY", "INSPECT", "CONFIGURE"]);
         let (create, n) = layout("WELDMENTS", "CREATE", &specs).unwrap();
         assert_eq!(create.iter().take(n).map(|c| c.id).collect::<Vec<_>>(), ["frame.member", "frame.end_cap"]);
         assert!(!panel_ids("MODEL", &specs).contains(&"frame.member"), "Frame Member's home is Weldments");
