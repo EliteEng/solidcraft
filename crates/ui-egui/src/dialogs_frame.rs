@@ -3,7 +3,7 @@
 //! picked in another sketch, or a profile of the design's profile library. A placement point, angle
 //! and mirror place the section on each line.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use egui::{Pos2, Rect, Sense, Stroke, vec2};
 use serde_json::{Map, Value, json};
@@ -80,6 +80,11 @@ pub struct Member {
     pub overrides: BTreeMap<String, CornerOverride>,
     /// The junction whose row in the corner list is under the pointer, marked in the view.
     pub list_hover: Option<String>,
+    /// Junctions picked together (Ctrl or Shift and a click on their markers, or their rows'
+    /// Select), which the corner list's Selected corners rows set at once.
+    pub selected: BTreeSet<String>,
+    /// The Selected corners gap as typed, applied to each picked junction.
+    pub selected_gap: String,
     /// The junctions the corner list and the view show, with the path and settings they were
     /// found for (worked out again only when those change).
     pub junctions: Option<(String, Vec<frame::JunctionReport>)>,
@@ -148,6 +153,8 @@ impl Member {
             through: 0,
             overrides: BTreeMap::new(),
             list_hover: None,
+            selected: BTreeSet::new(),
+            selected_gap: String::new(),
             junctions: None,
             pinned: BTreeMap::new(),
             line_names: BTreeMap::new(),
@@ -231,6 +238,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut 
         }
     }
     point_row(app, ui, m, picked || m.whole.is_some());
+    point_dots(app, ui, m, crate::selection::items(inputs, 1));
     enter |= hint_row(ui, "Angle", &mut m.angle, "0 deg");
     form_row(ui, "Mirror", |ui| check(ui, &mut m.mirror));
     let labels: Vec<&str> = CORNERS.iter().map(|c| tr(c.1)).collect();
@@ -533,15 +541,127 @@ fn point_row(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, sketch_section: 
     };
     let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
     choice_row(ui, "Point", "frame_point", &mut index, &shown);
-    let picked = index.checked_sub(offset).and_then(|i| names.get(i));
-    match picked {
+    let picked = index.checked_sub(offset).and_then(|i| names.get(i)).cloned();
+    choose_point(m, picked.as_deref(), library.is_some());
+}
+
+/// Put placement point `name` on the lines (none: the library profile's default, else the origin).
+fn choose_point(m: &mut Member, name: Option<&str>, library: bool) {
+    match name {
         // With a library profile, any point it names wins over its default.
-        Some(name) if library.is_some() => (m.anchor, m.point) = (0, Some(name.clone())),
+        Some(name) if library => (m.anchor, m.point) = (0, Some(name.to_string())),
         Some(name) => match ANCHORS.iter().position(|a| a.0 == name) {
             Some(anchor) => (m.anchor, m.point) = (anchor, None),
-            None => (m.anchor, m.point) = (0, Some(name.clone())),
+            None => (m.anchor, m.point) = (0, Some(name.to_string())),
         },
         None => (m.anchor, m.point) = (0, None),
+    }
+}
+
+/// The section of the group being edited as the preview draws it, from the Section picks, the
+/// library profile or the built-in profile's dimensions.
+fn preview_of(app: &SolveApp, m: &Member, section: &[Sel]) -> Option<frame::SectionPreview> {
+    let doc = &app.session.doc;
+    let (profiles, sketch) = section_of(section, m.whole).ok()?;
+    if let Some(sketch) = sketch {
+        let profiles = if profiles.is_empty() { ProfileSel::All } else { ProfileSel::Indices { indices: profiles.iter().map(|x| x.1).collect() } };
+        let st = app.session.model.state();
+        return frame::section_preview(doc, &st, &MemberProfile::Sketch { sketch: solidcraft_engine::doc::SketchId(sketch), profiles }).ok();
+    }
+    if let Some(id) = &m.library {
+        return frame::library_entry_preview(doc, library_entry(app, id)?).ok();
+    }
+    let kinds = frame::profile_kinds();
+    let (k, values) = kinds.get(m.kind).zip(m.dims.get(m.kind))?;
+    let dims = k
+        .required
+        .iter()
+        .chain(k.optional)
+        .zip(values)
+        .filter(|(_, v)| !v.trim().is_empty())
+        .map(|(name, v)| (name.to_string(), v.trim().into()))
+        .collect();
+    let profile = frame::ProfileSpec { kind: k.kind.to_string(), dims, size: None };
+    let st = app.session.model.state();
+    frame::section_preview(doc, &st, &MemberProfile::Library { profile }).ok()
+}
+
+/// Height (points) of the section preview under the Point row.
+const DOTS_HEIGHT: f32 = 140.0;
+
+/// The section drawn under the Point row with a dot at each placement point: the one on the lines
+/// filled, a dot's name shown under the pointer, and a click on a dot puts that point on the lines.
+fn point_dots(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, section: &[Sel]) {
+    let Some(preview) = preview_of(app, m, section) else { return };
+    let flip = if m.mirror { -1.0 } else { 1.0 };
+    let all = preview.outlines.iter().flatten().chain(preview.points.iter().map(|p| &p.1));
+    let (mut lo, mut hi) = (Pos2::new(f32::MAX, f32::MAX), Pos2::new(f32::MIN, f32::MIN));
+    for p in all {
+        let q = Pos2::new((p.x * flip) as f32, p.y as f32);
+        (lo, hi) = (lo.min(q), hi.max(q));
+    }
+    if !(lo.x <= hi.x && lo.y <= hi.y) {
+        return;
+    }
+    let width = ui.available_width().clamp(120.0, 360.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, DOTS_HEIGHT), Sense::hover());
+    let t = solidcraft_theme::Tokens::get();
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, t.panel_header);
+    let inner = rect.shrink(18.0);
+    let size = (hi - lo).max(vec2(1e-6, 1e-6));
+    let scale = (inner.width() / size.x).min(inner.height() / size.y);
+    let mid = Pos2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
+    // Profile y up.
+    let at = |x: f64, y: f64| inner.center() + vec2((x * flip) as f32 - mid.x, mid.y - y as f32) * scale;
+    for outline in &preview.outlines {
+        let mut pts: Vec<Pos2> = outline.iter().map(|p| at(p.x, p.y)).collect();
+        if let Some(first) = pts.first().copied() {
+            pts.push(first);
+        }
+        painter.add(egui::Shape::line(pts, Stroke::new(1.5, t.text_dim)));
+    }
+    let library = m.library.is_some();
+    let current = match &m.point {
+        Some(name) => name.clone(),
+        None if library => preview.default_point.clone().unwrap_or_else(|| "origin".into()),
+        None => ANCHORS.get(m.anchor).map_or("origin", |a| a.0).to_string(),
+    };
+    let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
+    let near = pointer.and_then(|p| {
+        preview
+            .points
+            .iter()
+            .map(|(n, q)| (n, at(q.x, q.y).distance(p)))
+            .filter(|(_, d)| *d < 9.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(n, _)| n.clone())
+    });
+    // The point on the lines last, over any other at the same place.
+    let mut order: Vec<&(String, solidcore_record::Vec2)> = preview.points.iter().collect();
+    order.sort_by_key(|p| p.0 == current);
+    for (name, q) in order {
+        let c = at(q.x, q.y);
+        let on = *name == current;
+        let hot = near.as_deref() == Some(name.as_str());
+        let fill = if on { t.manipulator } else { t.panel };
+        painter.circle(c, if hot { 6.0 } else { 4.5 }, fill, Stroke::new(1.5, t.manipulator));
+    }
+    if let (Some(name), Some(q)) = (&near, near.as_ref().and_then(|n| preview.points.iter().find(|p| p.0 == *n))) {
+        let c = at(q.1.x, q.1.y);
+        let galley = painter.layout_no_wrap(point_label(name), egui::FontId::proportional(t.font_label), t.text);
+        let mut pos = c + vec2(8.0, -8.0 - galley.size().y);
+        pos.x = pos.x.min(rect.right() - galley.size().x - 4.0).max(rect.left() + 4.0);
+        pos.y = pos.y.max(rect.top() + 4.0);
+        painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(3.0), 3.0, t.panel);
+        painter.galley(pos, galley, t.text);
+        // On the press, as the corner markers (a click's release can come late).
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            let default = library && preview.default_point.as_deref().unwrap_or("origin") == name.as_str() && m.point.is_none();
+            if !default {
+                choose_point(m, Some(name), library);
+            }
+        }
     }
 }
 
@@ -1019,8 +1139,11 @@ fn corner_list(ui: &mut egui::Ui, m: &mut Member) {
         return;
     }
     let mut hover = None;
+    // Picks of junctions that are gone (the path changed) are dropped.
+    m.selected.retain(|id| list.iter().any(|j| j.id == *id));
     crate::ui_kit::section_count(ui, "frame_corner_list", "ui.frame_corner_list", false, Some(list.len()), |ui| {
         crate::ui_kit::status_line(ui, solidcraft_ui_text::tr("ui.frame_corner_list.hint"), crate::ui_kit::StatusTone::Dim);
+        selected_rows(ui, m, &list);
         for j in &list {
             let r = ui.scope(|ui| corner_row(ui, m, j)).response;
             if r.contains_pointer() {
@@ -1031,13 +1154,91 @@ fn corner_list(ui: &mut egui::Ui, m: &mut Member) {
     m.list_hover = hover;
 }
 
-fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
+/// The treatments a junction's row offers: Default (the feature's), then Mitre where two members
+/// meet at an angle, Butt and None.
+fn treatment_options(mitre: bool) -> Vec<(&'static str, Option<Treatment>)> {
     let mut options: Vec<(&str, Option<Treatment>)> = vec![("ui.frame_corner_default", None)];
-    if j.kind == JunctionKind::L {
+    if mitre {
         options.push(("ui.frame_corner_mitre", Some(Treatment::Mitre)));
     }
     options.push(("ui.frame_corner_butt", Some(Treatment::Butt)));
     options.push(("ui.frame_corner_none", Some(Treatment::None)));
+    options
+}
+
+/// The junction's own weld gap, as typed into its row.
+fn gap_text(m: &Member, id: &str) -> String {
+    m.overrides.get(id).and_then(|o| o.gap.as_ref()).map(|g| g.as_str().to_string()).unwrap_or_default()
+}
+
+/// Set junction `id`'s own gap from `text` (empty: the feature's).
+fn set_gap(m: &mut Member, id: &str, text: &str) {
+    let gap = Some(text.trim()).filter(|t| !t.is_empty()).map(Into::into);
+    set_override(m, id, |o| o.gap = gap);
+}
+
+/// The Selected corners rows, shown while junctions are picked together: one treatment and one
+/// gap for all of them, and Clear.
+fn selected_rows(ui: &mut egui::Ui, m: &mut Member, list: &[frame::JunctionReport]) {
+    if m.selected.is_empty() {
+        return;
+    }
+    let picked: Vec<frame::JunctionReport> = list.iter().filter(|j| m.selected.contains(&j.id)).cloned().collect();
+    let options = treatment_options(picked.iter().all(|j| j.kind == JunctionKind::L));
+    let treatments: BTreeSet<Option<String>> =
+        picked.iter().map(|j| m.overrides.get(&j.id).and_then(|o| o.treatment).map(|t| format!("{t:?}"))).collect();
+    // One treatment shared by all, else none chosen yet.
+    let mut chosen = match treatments.len() {
+        1 => options.iter().position(|o| o.1.map(|t| format!("{t:?}")) == treatments.first().cloned().flatten()).unwrap_or(options.len()),
+        _ => options.len(),
+    };
+    let mut labels: Vec<&str> = options.iter().map(|o| tr(o.0)).collect();
+    labels.push("—");
+    let title = format!("{} ({})", tr("ui.frame_corner_selected"), picked.len());
+    if choice_row(ui, &title, "frame_corner_selected", &mut chosen, &labels).changed()
+        && let Some(o) = options.get(chosen)
+    {
+        set_selected(m, Some(o.1), None);
+    }
+    let mut gap = m.selected_gap.clone();
+    let typed = hint_row(ui, "ui.frame_weld_gap", &mut gap, tr("ui.frame_corner_default"));
+    if gap != m.selected_gap || typed {
+        set_selected(m, None, Some(&gap));
+    }
+    crate::ui_kit::row(ui, "", |ui| {
+        if crate::ui_kit::button(ui, tr("ui.frame_corner_clear_selection"), crate::ui_kit::Button::Small).clicked() {
+            m.selected.clear();
+            m.selected_gap.clear();
+        }
+    });
+}
+
+/// Give every picked junction `treatment` (`Some(None)`: the feature's) and weld gap `gap` (empty:
+/// the feature's), each when given.
+fn set_selected(m: &mut Member, treatment: Option<Option<Treatment>>, gap: Option<&str>) {
+    let ids: Vec<String> = m.selected.iter().cloned().collect();
+    for id in &ids {
+        if let Some(t) = treatment {
+            set_override(m, id, |o| o.treatment = t);
+        }
+        if let Some(g) = gap {
+            set_gap(m, id, g);
+        }
+    }
+    if let Some(g) = gap {
+        m.selected_gap = g.to_string();
+    }
+}
+
+/// Pick junction `id` together with the others, or drop it if it was picked.
+fn toggle_selected(m: &mut Member, id: &str) {
+    if !m.selected.remove(id) {
+        m.selected.insert(id.to_string());
+    }
+}
+
+fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
+    let options = treatment_options(j.kind == JunctionKind::L);
     let current = m.overrides.get(&j.id).and_then(|o| o.treatment);
     let mut chosen = options.iter().position(|o| o.1 == current).unwrap_or(0);
     let labels: Vec<&str> = options.iter().map(|o| tr(o.0)).collect();
@@ -1046,10 +1247,22 @@ fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
         let treatment = options.get(chosen).and_then(|o| o.1);
         set_override(m, &j.id, |o| o.treatment = treatment);
     }
+    if j.treatment != Treatment::None {
+        let mut gap = gap_text(m, &j.id);
+        let before = gap.clone();
+        hint_row(ui, "ui.frame_weld_gap", &mut gap, &format!("{} mm", j.gap));
+        if gap != before {
+            set_gap(m, &j.id, &gap);
+        }
+    }
     let overridden = m.overrides.contains_key(&j.id);
-    if j.through.is_some() || overridden {
+    {
         crate::ui_kit::row(ui, "", |ui| {
             ui.horizontal(|ui| {
+                let mut on = m.selected.contains(&j.id);
+                if crate::ui_kit::checkbox(ui, tr("ui.frame_corner_select"), &mut on).changed() {
+                    toggle_selected(m, &j.id);
+                }
                 if let Some(line) = &j.through {
                     ui.label(format!("{} {}", tr("ui.frame_runs_through"), line_label(m, line)));
                     if crate::ui_kit::button(ui, tr("ui.frame_swap_through"), crate::ui_kit::Button::Small).clicked() {
@@ -1111,6 +1324,9 @@ pub fn overlay(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj:
             painter.line_segment([end, end - dir * 10.0 - side], stroke);
         }
         let fill = if m.overrides.contains_key(&j.id) { t.manipulator } else { t.panel };
+        if m.selected.contains(&j.id) {
+            painter.circle_stroke(c, 13.0, Stroke::new(3.0, t.sel_edge));
+        }
         painter.circle(c, if hot { 9.0 } else { 7.0 }, fill, Stroke::new(2.5, t.manipulator));
         if hot {
             let text = match &j.through {
@@ -1125,12 +1341,18 @@ pub fn overlay(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj:
         }
         // On the press: a marker is a switch, not something to drag, and a press that the
         // window is slow to see released still counts.
-        if j.through.is_some() && r.contains_pointer() && ui.input(|i| i.pointer.primary_pressed()) {
-            clicked = Some(j.clone());
+        if r.contains_pointer() && ui.input(|i| i.pointer.primary_pressed()) {
+            let together = ui.input(|i| i.modifiers.command || i.modifiers.shift);
+            if together || j.through.is_some() {
+                clicked = Some((j.clone(), together));
+            }
         }
     }
-    if let Some(j) = clicked {
-        swap_through(m, &j);
+    match clicked {
+        // With Ctrl or Shift a marker picks its junction together with others.
+        Some((j, true)) => toggle_selected(m, &j.id),
+        Some((j, false)) => swap_through(m, &j),
+        None => {}
     }
 }
 

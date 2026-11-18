@@ -481,8 +481,11 @@ adds its one pending format file.
    `between_groups` (butt for new features), `gap_between` and `group_through`
    (earlier | later; named `through` above). `frame.member` takes `groups`; there is no separate
    `frame.members`. The window's Member group row edits one group at a time.
-4. **Dialog.** Library pickers, placement point dots, groups list, junction markers and the
-   corner panel (`corner_overrides`). Screenshots in the PR, as AGENTS.md requires.
+4. **Dialog** (built on branch `frame-profile-library`). Library pickers, placement point dots
+   (the section drawn under the Point row, a click on a dot picks it), the groups list, junction
+   markers and the corner panel (`corner_overrides`: per corner treatment, through member and
+   weld gap; Ctrl/Shift-click markers to set several at once). Screenshots in the PR, as
+   AGENTS.md requires.
 5. **Cope**, and multi-member junction ranking.
 6. **Trim/Extend.**
 7. **Cut list** and its export, stable numbers, Browser folder. Built on branch
@@ -493,6 +496,12 @@ adds its one pending format file.
    rather than recorded on the result. Still to do: stable item numbers kept in the design
    (`renumber`, `set`), the Browser folder, other weldment bodies, and opposite-hand pairs.
 8. **End caps.** 9. **Gussets.** 10. **Welds.**
+11. **Member exports for tube lasers and beam lines.** Export one member as a STEP file of its
+   solid on its own, placed with its line along X from the origin. Export one member as a
+   three-view DXF: the user picks the member's front face and top face (programmatically, face
+   names), and the file holds the front, top and end views of the cut member, projected exactly
+   from its edges (lines and arcs, no mesh), laid out in third-angle order with the member's
+   length along X.
 
 Steps 1 and 2 don't depend on 3. Steps 6–10 depend on the end records from step 3.
 

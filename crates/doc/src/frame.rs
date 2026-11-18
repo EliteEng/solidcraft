@@ -349,8 +349,8 @@ impl crate::walk::Walk for ProfileSpec {
 }
 
 pub use crate::eval::frame_member::{
-    EndCut, JunctionReport, MemberCut, feature_junctions, grouped_member_names, junctions_on, line_groups_on, line_ids_on, member_cuts_report,
-    member_line_ids, member_names, member_turns, sketch_point, sketch_section,
+    EndCut, JunctionReport, MemberCut, SectionPreview, feature_junctions, grouped_member_names, junctions_on, library_entry_preview, line_groups_on,
+    line_ids_on, member_cuts_report, member_line_ids, member_names, member_turns, section_preview, sketch_point, sketch_section,
 };
 
 /// Most groups one frame member feature has, its own fields' group included.

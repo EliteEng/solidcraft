@@ -767,6 +767,39 @@ fn straight(pts: &[Vec3]) -> Option<(Vec3, Vec3)> {
     Some((a, b))
 }
 
+/// A section as Frame Member's preview draws it: its outlines as polylines (outer loops and holes,
+/// in the profile's own coordinates), its placement points by name and its default point.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SectionPreview {
+    pub outlines: Vec<Vec<Vec2>>,
+    pub points: Vec<(String, Vec2)>,
+    pub default_point: Option<String>,
+}
+
+impl SectionPreview {
+    fn of(regions: &[Region2], points: Vec<(String, Vec2)>, default_point: Option<String>) -> SectionPreview {
+        let size = regions.iter().flat_map(|r| r.outer.polyline(1.0).to_vec()).map(|p| p.x.abs().max(p.y.abs())).fold(1.0_f64, f64::max);
+        let outlines = regions.iter().flat_map(Region2::loops).map(|l| l.polyline(size * 1e-3).to_vec()).collect();
+        SectionPreview { outlines, points, default_point }
+    }
+}
+
+/// Profile `profile`'s section as a member takes it before mirroring and placing, worked out with
+/// the design's parameters.
+pub fn section_preview(doc: &Document, st: &ModelState, profile: &MemberProfile) -> Result<SectionPreview> {
+    let (vals, _) = doc.param_values();
+    let s = profile_regions(doc, &vals, st, profile)?;
+    Ok(SectionPreview::of(&s.regions, s.points, s.default_point))
+}
+
+/// Library entry `entry` (the design's or a personal one) worked out with the design's
+/// parameters.
+pub fn library_entry_preview(doc: &Document, entry: &frame_library::LibraryProfile) -> Result<SectionPreview> {
+    let (vals, _) = doc.param_values();
+    let r = entry.resolve(|label, e, kind| val(&vals, e, kind).map_err(|err| DocError::Invalid(format!("profile `{label}`: {err}"))))?;
+    Ok(SectionPreview::of(&r.regions, r.points, entry.default_point.clone()))
+}
+
 /// A member's section before it is placed on a line: its regions in the profile's own
 /// coordinates, its placement points, the point a library profile starts on, what its members
 /// are named after when they have no name of their own, and the profile's own origin (the point

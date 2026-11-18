@@ -864,6 +864,76 @@ fn a_click_on_a_corner_marker_swaps_the_member_that_runs_through() {
     assert!(now.is_some() && now.as_deref() != Some(before.as_str()), "{:?}", m.overrides);
 }
 
+/// Shift-clicking corner markers picks them together; the Selected corners rows then give them
+/// all one treatment and one weld gap, which reach the feature as their own settings.
+#[test]
+fn corners_picked_together_take_one_treatment_and_gap() {
+    let mut h = crate::scenario::Harness::new();
+    for (c, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Frame"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [60, 40]})),
+        ("sketch.finish", json!({})),
+        ("frame.member", json!({"sketch": "Frame", "profile": {"kind": "rect_tube", "width": 4, "height": 4, "wall": 0.5}})),
+    ] {
+        h.app.run(c, p).unwrap();
+    }
+    let f = h.app.session.doc.features.last().unwrap().id;
+    h.app.edit_feature(f);
+    h.frames(3);
+    let rect = h.app.viewport.rect.unwrap();
+    let proj = crate::viewport::projection(&h.app, rect);
+    let Some(Kind::Frame(m)) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("no dialog") };
+    let shown: Vec<(String, Pos2)> =
+        markers(m, &proj).into_iter().filter(|(_, c)| rect.shrink(20.0).contains(*c)).map(|(j, c)| (j.id.clone(), c)).collect();
+    assert!(shown.len() >= 2, "{shown:?} of {:?} in {rect:?}", markers(m, &proj).iter().map(|(j, c)| (j.id.clone(), *c)).collect::<Vec<_>>());
+    for (_, at) in &shown[..2] {
+        h.call("ui.click", json!({"x": at.x, "y": at.y, "shift": true}));
+        h.frames(2);
+    }
+    let picked: BTreeSet<String> = shown[..2].iter().map(|(id, _)| id.clone()).collect();
+    let d = h.app.dialog.as_mut().unwrap();
+    let m = member(d);
+    assert_eq!(m.selected, picked, "a shift-click picks, and swaps nothing: {:?}", m.overrides);
+    assert!(m.overrides.is_empty());
+    set_selected(m, Some(Some(Treatment::Butt)), Some("0.2 mm"));
+    let d = h.app.dialog.clone().unwrap();
+    let c = apply_commands(&h.app, &d).unwrap();
+    let want: Map<String, Value> = picked.iter().map(|id| (id.clone(), json!({"treatment": "butt", "gap": "0.2 mm"}))).collect();
+    assert_eq!(c[0].1["params"]["corner_overrides"], Value::Object(want), "{c:?}");
+    run_all(&mut h.app, c);
+    let built = h.app.run("frame.junctions", json!({"feature": f})).unwrap();
+    for j in built["junctions"].as_array().unwrap() {
+        let id = j["id"].as_str().unwrap();
+        let (treatment, gap) = if picked.contains(id) { ("butt", 0.2) } else { ("mitre", 0.0) };
+        assert_eq!((j["treatment"].as_str().unwrap(), j["gap"].as_f64().unwrap()), (treatment, gap), "{j}");
+    }
+}
+
+/// The section preview under the Point row has the profile's outline and a dot per placement
+/// point, the anchors and the points its kind generates.
+#[test]
+fn the_section_preview_has_the_outline_and_every_placement_point() {
+    let mut app = frame_app();
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines);
+    let m = member(&mut d).clone();
+    let p = preview_of(&app, &m, &[]).expect("a built-in profile's preview");
+    assert_eq!(p.outlines.len(), 2, "a rectangular tube's outside and inside");
+    let names: Vec<&str> = p.points.iter().map(|x| x.0.as_str()).collect();
+    for n in point_names(&app, &m, false) {
+        assert!(names.contains(&n.as_str()), "{n} in {names:?}");
+    }
+    let (lo, hi) = p.outlines[0].iter().fold((f64::MAX, f64::MIN), |(lo, hi), q| (lo.min(q.x), hi.max(q.x)));
+    assert!(hi - lo > 1.0, "the outline has a size: {lo}…{hi}");
+    // A dot chosen puts that point on the lines, as the Point row does.
+    let mut m = m;
+    choose_point(&mut m, Some("top_left"), false);
+    assert_eq!((m.anchor, m.point.clone()), (ANCHORS.iter().position(|a| a.0 == "top_left").unwrap(), None));
+    let generated = p.points.iter().map(|x| x.0.clone()).find(|n| !ANCHORS.iter().any(|a| a.0 == n)).expect("a generated point");
+    choose_point(&mut m, Some(&generated), false);
+    assert_eq!((m.anchor, m.point.clone()), (0, Some(generated)));
+}
+
 /// The corner list names lines after their members: an edited feature's names, a new feature's
 /// after Name, else the line.
 #[test]
