@@ -502,8 +502,11 @@ adds its one pending format file.
    cuts either way round; stock per profile; mass from exact volume; CSV and JSON export) and the
    Cut List window (Weldments › Inspect; picking an item selects its members). Lengths come from
    the cut planes and the section's exact reach, recomputed from the feature (`member_cuts_report`)
-   rather than recorded on the result. Still to do: stable item numbers kept in the design
-   (`renumber`, `set`), the Browser folder, other weldment bodies, and opposite-hand pairs.
+   rather than recorded on the result. Also built: item numbers and notes kept in the design
+   (`Document::cut_list`, `frame.cut_list.renumber`, `frame.cut_list.set`; `set` keeps a note,
+   not the `properties` sketched above), the Browser's Cut List folder, end caps and gussets as
+   plates (`plates`), and opposite-hand pairs (`opposite_hand`: the same section without its
+   mirror and each end's lean folded onto one side of the profile's y axis).
 8. **End caps**: main has End Cap (#8606, `crate::end_cap`, `FeatureKind::FrameEndCap` with
    picked end faces, offset, corner chamfer, outward or inward), so this plan builds on it rather
    than adding its own. Still to add to it: caps on mitred and angled ends, rounded corners.
@@ -520,9 +523,9 @@ adds its one pending format file.
 11. **Member exports for tube lasers and beam lines.** Export one member as a STEP file of its
    solid on its own, placed with its line along X from the origin. Export one member as a
    three-view DXF: the user picks the member's front face and top face (programmatically, face
-   names), and the file holds the front, top and end views of the cut member, projected exactly
-   from its edges (lines and arcs, no mesh), laid out in third-angle order with the member's
-   length along X.
+   names), and the file holds the top, front and bottom views of the cut member (the bottom looking
+   up at the face opposite the top), projected exactly from its edges (lines and arcs, no mesh),
+   stacked with the member's length along X so each face's cuts and holes line up.
 
 Steps 1 and 2 don't depend on 3. Steps 6–10 depend on the end records from step 3.
 

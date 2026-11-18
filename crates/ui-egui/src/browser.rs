@@ -1875,6 +1875,7 @@ fn component_rows_inner(
         canvas_rows(app, rows, d, acts);
         point_clouds::rows(app, rows, d, acts);
         analysis_rows(app, rows, d, acts);
+        cut_list_rows(app, rows, d);
     }
     let render = crate::render_workspace::active(app);
     for (slot, folder) in root.folders.iter_mut().zip(["bodies", "sketches", "construction"]) {
@@ -2425,6 +2426,64 @@ pub fn view_items(app: &SolveApp, name: &str) -> Vec<Item> {
         Item::action("ui.rename", "Rename", "rename").with(json!({ "view": name })).on_if(saved),
         Item::action("view.delete", "Delete", "delete").with(json!({ "view": name })).on_if(saved),
     ]
+}
+
+thread_local! {
+    /// The Cut List folder's rows (number, label, members) for the design revision they were made at.
+    static CUT_ROWS: std::cell::RefCell<Option<(u64, Vec<(u64, String, Vec<String>)>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The Cut List folder, while the design has frame members: one row per cut-list item (its number,
+/// description, length and quantity); a click selects its members.
+fn cut_list_rows(app: &mut SolveApp, rows: &mut Rows<'_>, depth: usize) {
+    let has = app.session.doc.features.iter().any(|f| !f.suppressed && matches!(f.kind, solidcraft_engine::doc::FeatureKind::FrameMember { .. }));
+    if !has {
+        return;
+    }
+    let key = "cutlist";
+    let open = is_open(app, key, false);
+    let r = node_row(rows, Spec { key, ..Default::default() }, Row { depth, fold: Some(open), icon: "bom", label: "Cut List", ..Default::default() });
+    if r.fold || r.clicked {
+        toggle(app, key, false);
+    }
+    if r.double {
+        crate::cut_list_panel::open(app);
+    }
+    if !open {
+        return;
+    }
+    let revision = app.session.revision;
+    let items = CUT_ROWS.with(|c| {
+        let mut c = c.borrow_mut();
+        if !c.as_ref().is_some_and(|(r, _)| *r == revision) {
+            let list = app.session.execute("frame.cut_list", &json!({})).unwrap_or(Value::Null);
+            let rows = list["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|i| {
+                    let length = crate::canvas::format_len_drag(&app.session.doc, i["length"].as_f64().unwrap_or(0.0), 0.01, 2);
+                    let label = format!("{} · {} · {length} × {}", i["item"], i["description"].as_str().unwrap_or_default(), i["quantity"]);
+                    let members = i["members"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                    (i["item"].as_u64().unwrap_or(0), label, members)
+                })
+                .collect();
+            *c = Some((revision, rows));
+        }
+        c.as_ref().map(|(_, rows)| rows.clone()).unwrap_or_default()
+    });
+    for (n, label, members) in items {
+        let item_key = format!("cutitem:{n}");
+        let r = node_row(
+            rows,
+            Spec { key: &item_key, ..Default::default() },
+            Row { depth: depth + 1, icon: "frame_member", label: &label, name: true, ..Default::default() },
+        );
+        if r.clicked {
+            let items: Vec<Sel> = members.into_iter().map(|name| Sel::Body { name }).collect();
+            let _ = app.run("select.set", json!({ "items": items }));
+        }
+    }
 }
 
 /// The Analysis folder: a row per plane of the Section Analysis while it has any (shown or

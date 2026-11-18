@@ -364,6 +364,23 @@ pub struct TrimEnd {
     pub end: crate::frame_corner::End,
 }
 
+/// What the design keeps of its cut list: item numbers and descriptions, each by the item's
+/// grouping key (its section, lengths, end cuts and material), so a member added later takes a
+/// new number and the others keep theirs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CutListSettings {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub numbers: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub descriptions: BTreeMap<String, String>,
+}
+
+impl CutListSettings {
+    pub fn is_empty(&self) -> bool {
+        self.numbers.is_empty() && self.descriptions.is_empty()
+    }
+}
+
 /// An edge a weld runs along: a body and a point on the edge.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 pub struct WeldEdge {

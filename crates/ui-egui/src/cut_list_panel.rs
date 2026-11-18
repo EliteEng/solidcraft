@@ -1,7 +1,8 @@
 //! The Cut List window: `frame.cut_list`'s items (identical frame members together, with their
 //! lengths, end angles and mass), each profile's stock length and the total mass, with Export
-//! CSV… and Export JSON…. Picking an item selects its members. The Weldments tab's Cut List
-//! (`ui.start` of `frame.cut_list`) opens it.
+//! CSV… and Export JSON…. Picking an item selects its members and offers its note; Keep Numbers
+//! and Renumber keep the item numbers in the design. The Weldments tab's Cut List (`ui.start` of
+//! `frame.cut_list`) opens it.
 
 use egui::RichText;
 use serde_json::{Value, json};
@@ -13,8 +14,15 @@ use solidcraft_theme::Tokens;
 /// The window's state; the items come from the engine.
 #[derive(Default)]
 pub struct CutListPanel {
-    /// The list for the design revision it was made at.
-    cache: Option<(u64, Value)>,
+    /// The list for the design revision (and the choices below) it was made at.
+    cache: Option<((u64, bool, bool), Value)>,
+    /// Mirror-image pieces listed as one item.
+    pub opposite: bool,
+    /// End caps and gussets listed as plates.
+    pub plates: bool,
+    /// The picked item's note as typed, and the item key it was loaded for.
+    pub note: String,
+    note_for: Option<String>,
     /// The picked item's index.
     pub picked: Option<usize>,
     /// Why the list couldn't be made.
@@ -24,13 +32,13 @@ pub struct CutListPanel {
 impl CutListPanel {
     /// The cut list for the design as it is now (made again only after a change).
     fn list(&mut self, app: &mut SolveApp) -> Value {
-        let revision = app.session.revision;
+        let revision = (app.session.revision, self.opposite, self.plates);
         if let Some((r, v)) = &self.cache
             && *r == revision
         {
             return v.clone();
         }
-        let v = match app.session.execute("frame.cut_list", &json!({})) {
+        let v = match app.session.execute("frame.cut_list", &json!({"opposite_hand": self.opposite, "plates": self.plates})) {
             Ok(v) => {
                 self.error = None;
                 v
@@ -51,14 +59,14 @@ pub fn open(app: &mut SolveApp) {
 }
 
 /// The grid's headers.
-const HEADERS: [&str; 8] = ["Item", "Qty", "Description", "Length", "Short length", "Angle 1", "Angle 2", "Mass each"];
+const HEADERS: [&str; 9] = ["Item", "Qty", "Description", "Length", "Short length", "Angle 1", "Angle 2", "Mass each", "Note"];
 
 fn number(v: &Value) -> f64 {
     v.as_f64().unwrap_or(0.0)
 }
 
 /// An item's cells after the item number, as the grid shows them.
-fn cells(app: &SolveApp, item: &Value) -> [String; 7] {
+fn cells(app: &SolveApp, item: &Value) -> [String; 8] {
     // To a hundredth of a millimetre, in the design's units.
     let length = |v: &Value| crate::canvas::format_len_drag(&app.session.doc, number(v), 0.01, 2);
     // A coped end reads `cope` after its angle.
@@ -67,14 +75,20 @@ fn cells(app: &SolveApp, item: &Value) -> [String; 7] {
         if v["cope"].as_bool() == Some(true) { format!("{a} {}", solidcraft_ui_text::tr("ui.frame_corner_cope")) } else { a }
     };
     let mass = item["mass_each_g"].as_f64().map_or_else(String::new, |g| format!("{:.3} kg", g / 1000.0));
+    // Opposite hands listed together: how many of them are the other hand.
+    let quantity = match item["opposite"].as_u64().filter(|n| *n > 0) {
+        Some(n) => format!("{} ({n} {})", item["quantity"], solidcraft_ui_text::tr("ui.cut_list_opposite")),
+        None => item["quantity"].to_string(),
+    };
     [
-        item["quantity"].to_string(),
+        quantity,
         item["description"].as_str().unwrap_or_default().to_string(),
         length(&item["length"]),
         length(&item["short_length"]),
         angle(&item["ends"][0]),
         angle(&item["ends"][1]),
         mass,
+        item["note"].as_str().unwrap_or_default().to_string(),
     ]
 }
 
@@ -84,7 +98,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let t = Tokens::get();
     let list = d.list(app);
     let items: Vec<Value> = list["items"].as_array().cloned().unwrap_or_default();
-    let rows: Vec<[String; 7]> = items.iter().map(|i| cells(app, i)).collect();
+    let rows: Vec<[String; 8]> = items.iter().map(|i| cells(app, i)).collect();
     let stock: Vec<String> = list["stock"]
         .as_array()
         .into_iter()
@@ -112,7 +126,24 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                 number(&w["mass_g"]) / 1000.0
             )
         }))
+        .chain(list["plates"].as_array().into_iter().flatten().map(|p| {
+            format!(
+                "{} × {} {}, {} × {} × {}",
+                p["quantity"],
+                solidcraft_ui_text::tr_label(p["kind"].as_str().unwrap_or_default()),
+                p["material"].as_str().unwrap_or_default(),
+                len(&p["length"]),
+                len(&p["width"]),
+                len(&p["thickness"])
+            )
+        }))
         .collect();
+    let picked_item = d.picked.and_then(|i| items.get(i)).cloned();
+    if picked_item.as_ref().map(|i| i["key"].as_str().unwrap_or_default().to_string()) != d.note_for {
+        d.note_for = picked_item.as_ref().map(|i| i["key"].as_str().unwrap_or_default().to_string());
+        d.note = picked_item.as_ref().and_then(|i| i["note"].as_str()).unwrap_or_default().to_string();
+    }
+    let mut change: Option<(&str, Value)> = None;
     let (mut export, mut pick) = (None, None);
     let closed = crate::ui_kit::Window::new(egui::Id::unique("sc_cut_list"), "bom", solidcraft_ui_text::tr_label("Cut List")).cards(3.0).show_body(
         ctx,
@@ -186,8 +217,27 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Some(e) = &d.error {
                 ui.label(RichText::new(e).color(t.error));
             }
+            ui.horizontal(|ui| {
+                crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.cut_list_opposite_together"), &mut d.opposite);
+                crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.cut_list_plates"), &mut d.plates);
+            });
+            if let Some(item) = &picked_item {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{} {}", solidcraft_ui_text::tr("ui.cut_list_note_for"), item["item"]));
+                    ui.add(egui::TextEdit::singleline(&mut d.note).desired_width(220.0));
+                    if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.cut_list_save_note"), crate::ui_kit::Button::Small).clicked() {
+                        change = Some(("frame.cut_list.set", json!({"item": item["item"], "note": d.note, "opposite_hand": d.opposite})));
+                    }
+                });
+            }
             ui.separator();
             ui.horizontal(|ui| {
+                if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.cut_list_keep_numbers"), crate::ui_kit::Button::Normal).clicked() {
+                    change = Some(("frame.cut_list.renumber", json!({"order": "current", "opposite_hand": d.opposite})));
+                }
+                if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.cut_list_renumber"), crate::ui_kit::Button::Normal).clicked() {
+                    change = Some(("frame.cut_list.renumber", json!({"order": "profile", "opposite_hand": d.opposite})));
+                }
                 for (label, ext) in [("Export CSV…", "csv"), ("Export JSON…", "json")] {
                     if crate::ui_kit::button(ui, label, crate::ui_kit::Button::Normal).clicked() {
                         export = Some(ext);
@@ -203,7 +253,17 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         app.session.selection = members.iter().filter_map(Value::as_str).map(|name| Sel::Body { name: name.to_string() }).collect();
     }
     if let Some(ext) = export {
-        app.pick_save_command(&format!("cut-list.{ext}"), &[ext], "frame.cut_list", json!({"format": ext}));
+        app.pick_save_command(
+            &format!("cut-list.{ext}"),
+            &[ext],
+            "frame.cut_list",
+            json!({"format": ext, "opposite_hand": d.opposite, "plates": d.plates}),
+        );
+    }
+    if let Some((cmd, p)) = change
+        && let Err(e) = app.run(cmd, p)
+    {
+        d.error = Some(e);
     }
     if !closed {
         app.cut_list = Some(d);

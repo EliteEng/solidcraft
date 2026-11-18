@@ -3453,6 +3453,7 @@ fn same_but_features(a: &Document, b: &Document) -> bool {
         sheet,
         plastic,
         frame_profiles,
+        cut_list,
         parts,
         links,
         configs,
@@ -3494,6 +3495,7 @@ fn same_but_features(a: &Document, b: &Document) -> bool {
         && *sheet == b.sheet
         && *plastic == b.plastic
         && *frame_profiles == b.frame_profiles
+        && *cut_list == b.cut_list
         && *parts == b.parts
         && *links == b.links
         && *configs == b.configs

@@ -3937,6 +3937,10 @@ pub struct Document {
     /// The profile library frame members are made from (#4003).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frame_profiles: Vec<crate::frame_library::LibraryProfile>,
+    /// The cut list's item numbers and descriptions, kept by grouping key so adding a member
+    /// doesn't renumber the shop's drawings.
+    #[serde(default, skip_serializing_if = "crate::frame::CutListSettings::is_empty")]
+    pub cut_list: crate::frame::CutListSettings,
     /// Components that are standard parts (by component id): what to rebuild them from.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub parts: std::collections::BTreeMap<u64, StandardPart>,
@@ -4294,6 +4298,7 @@ impl Document {
             sheet: Default::default(),
             plastic: Default::default(),
             frame_profiles: Vec::new(),
+            cut_list: Default::default(),
             configs: Default::default(),
             parts: Default::default(),
             links: Default::default(),

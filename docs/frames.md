@@ -282,8 +282,19 @@ square, the material and the mass of one piece. Below it, each profile's pieces 
 Lengths come from each member's line, its section and the exact cut planes at its ends, not from
 a mesh: the longest length is the far points of the two cuts, the shortest what a saw marks for a
 mitre (a mitred 40 mm tube on a 600 mm line is 640 long and 560 short). Mass is the body's exact
-volume times its material's density. Item numbers follow the order of the list (by profile, then
-longest first); numbers kept in the design are a later step.
+volume times its material's density.
+
+Item numbers: until they are kept, items are numbered in list order (by profile, then longest
+first). **Keep Numbers** keeps the numbers shown in the design, by each item's grouping key (its
+section, lengths, end cuts and material), so a member added later takes the next free number and
+the others keep theirs; **Renumber** numbers them again by profile and keeps that. Pick an item to
+give it a **Note** (a part number, a finish, a drawing reference), kept with it in the design and
+shown in the list and the CSV. **List opposite hands together** lists mirror-image pieces (a left
+and a right) as one item, `2 (1 opposite hand)`; **Plates** adds the end caps and gussets with
+their thickness and size, and their mass to the total. The Browser's **Cut List** folder lists the
+items too; a click selects an item's members, a double-click opens the window.
+`frame.cut_list.renumber` `{order?: profile|length|current}` and `frame.cut_list.set` `{item,
+note?}` do the same; `frame.cut_list` takes `opposite_hand` and `plates`.
 
 ## frame.member
 
