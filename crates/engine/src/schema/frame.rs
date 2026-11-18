@@ -794,6 +794,9 @@ pub enum TreatmentParam {
     Mitre,
     /// One runs through, the other stops at its face.
     Butt,
+    /// One runs through, the other is cut to fit round it (its end trimmed by the through
+    /// member's outline, grown by the gap): tube on tube, or a channel fitted to a beam.
+    Cope,
 }
 
 impl From<TreatmentParam> for solidcraft_doc::frame_corner::Treatment {
@@ -802,6 +805,7 @@ impl From<TreatmentParam> for solidcraft_doc::frame_corner::Treatment {
             TreatmentParam::None => Self::None,
             TreatmentParam::Mitre => Self::Mitre,
             TreatmentParam::Butt => Self::Butt,
+            TreatmentParam::Cope => Self::Cope,
         }
     }
 }
@@ -1070,6 +1074,8 @@ pub struct CutEnd {
     pub angle: f64,
     /// Which way, as a direction in the profile's own x and y (degrees from +x).
     pub towards: f64,
+    /// The end is coped: fitted round another member, not cut flat.
+    pub cope: bool,
 }
 
 /// One cut-list item: identical members (same section, lengths and end cuts, either way round).

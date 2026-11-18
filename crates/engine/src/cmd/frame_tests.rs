@@ -1752,6 +1752,53 @@ fn a_cross_bar_butts_against_the_rails_it_lands_on() {
     assert!(j["junctions"].as_array().unwrap().iter().filter(|j| j["kind"] == "L").all(|j| j["treatment"] == "mitre"));
 }
 
+/// A round tube landing on another copes round it: it reaches the rail's centre line at its sides
+/// and its near face in the middle, the rail runs on untouched, and the cut list marks the end.
+#[test]
+fn a_round_tube_copes_round_the_rail_it_lands_on() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Frame"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [600, 0]]}));
+    run(&mut s, "sketch.line", json!({"points": [[300, 0], [300, 400]]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let round = json!({"kind": "round_tube", "diameter": 40, "wall": 3});
+    let fid = run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": round, "corners": {"treatment": "cope"}}))["feature"].clone();
+    let j = run(&mut s, "frame.junctions", json!({"feature": fid.clone()}));
+    assert!(j["junctions"].as_array().unwrap().iter().any(|x| x["kind"] == "T" && x["treatment"] == "cope"), "{j}");
+    let b = bodies(&mut s);
+    let area = PI * (400.0 - 289.0);
+    let (rail, post) = (&b[0], &b[1]);
+    assert!(rel(rail.1, area * 600.0) < MEASURED, "the rail stays whole: {rail:?}");
+    // The post reaches y = 0 where its sides pass the rail's top and bottom, so its box starts at
+    // the centre line; it holds more than a post butted at the near face and less than one run to
+    // the centre.
+    assert!(post.2[1].abs() < 1e-3 && (post.3[1] - 400.0).abs() < 1e-6, "{post:?}");
+    assert!(post.1 > area * 380.0 * (1.0 + MEASURED) && post.1 < area * 400.0 * (1.0 - MEASURED), "{post:?}");
+    let list = run(&mut s, "frame.cut_list", json!({"feature": fid, "format": "csv"}));
+    let item = list["items"].as_array().unwrap().iter().find(|i| (f(&i["length"]) - 400.0).abs() < 1e-6).cloned().unwrap_or_default();
+    assert!((f(&item["short_length"]) - 380.0).abs() < 1e-6, "shortest at the rail's near face: {list}");
+    assert!(item["ends"][0]["cope"] == true && item["ends"][1]["cope"] == false, "{list}");
+    assert!(list["csv"].as_str().unwrap().contains(",cope,square,"), "{list}");
+}
+
+/// A cope between rectangular tubes fits the butting member round the face it meets, gap and all:
+/// the rail's outline grown by the 3 mm gap has corners of radius 9 (its own 6 plus 3) about
+/// (±14, ±14), so the post's top and bottom faces (z = ±20) reach into them to 14 + √(9² − 6²),
+/// short of the 23 mm a butt stops at. The longer rails run through, as at a butt.
+#[test]
+fn a_rectangular_tube_cope_fits_round_the_face_with_its_gap() {
+    let mut s = Session::default();
+    rectangle_frame(&mut s);
+    let lines = rectangle_lines(&s);
+    run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corners": {"treatment": "cope", "gap": 3}}));
+    let got = spans(&mut s, &lines);
+    let reach = 14.0 + 45f64.sqrt();
+    let want = [(-20.0, 620.0), (reach, 400.0 - reach), (-20.0, 620.0), (reach, 400.0 - reach)];
+    for ((id, _), w) in lines.iter().zip(want) {
+        assert!((got[id].0 - w.0).abs() < 1e-3 && (got[id].1 - w.1).abs() < 1e-3, "{id}: {:?} vs {w:?} ({got:?})", got[id]);
+    }
+}
+
 #[test]
 fn a_corner_override_changes_one_junction_and_is_kept_through_edits() {
     let mut s = Session::default();

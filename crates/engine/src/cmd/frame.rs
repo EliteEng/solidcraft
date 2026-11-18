@@ -65,7 +65,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .doc_only()
         .contract(&JUNCTIONS_CONTRACT)
         .output(output_schema_for::<JunctionsResult>)
-        .params("feature: a frame member feature (id or name). Returns junctions: [{id, kind: L|I|T|Multi, at: [x,y,z] mm, ends: [[line id, start|end]], span? (the line a T lands on), treatment: none|mitre|butt, gap (mm), butt_cut: square|flush, through?, overridden, between (members of different groups meet)}]: where its members meet and what each junction gets; frame.member's corner_overrides takes these ids"),
+        .params("feature: a frame member feature (id or name). Returns junctions: [{id, kind: L|I|T|Multi, at: [x,y,z] mm, ends: [[line id, start|end]], span? (the line a T lands on), treatment: none|mitre|butt|cope, gap (mm), butt_cut: square|flush, through?, overridden, between (members of different groups meet)}]: where its members meet and what each junction gets; frame.member's corner_overrides takes these ids"),
     CommandSpec::new("frame.cut_list", "Cut List", crate::checked!("frame.cut_list", cut_list))
         .at("WELDMENTS", "INSPECT")
         .icon("bom")
@@ -446,13 +446,15 @@ fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
         let k = 10f64.powi(places);
         (v * k).round() / k + 0.0
     };
-    let end_key = |e: &[frame::EndCut]| {
-        e.first().map_or_else(|| "square".to_string(), |c| format!("{}@{}", rounded(c.angle, 4), rounded(c.towards, 3).rem_euclid(360.0) + 0.0))
+    let end_key = |e: &[frame::EndCut], cope: bool| {
+        let cut =
+            e.first().map_or_else(|| "square".to_string(), |c| format!("{}@{}", rounded(c.angle, 4), rounded(c.towards, 3).rem_euclid(360.0) + 0.0));
+        if cope { format!("cope {cut}") } else { cut }
     };
     let mut items: Vec<CutItem> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
     for (c, name, material, mass) in members {
-        let mut ends = [end_key(&c.ends[0]), end_key(&c.ends[1])];
+        let mut ends = [end_key(&c.ends[0], c.coped[0]), end_key(&c.ends[1], c.coped[1])];
         ends.sort();
         let key = format!("{}|{}|{}|{}|{}|{material}", c.profile_key, rounded(c.length, 4), rounded(c.short_length, 4), ends[0], ends[1]);
         if let Some(k) = keys.iter().position(|x| *x == key)
@@ -462,9 +464,11 @@ fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
             item.members.push(name);
             continue;
         }
-        let end = |e: &[frame::EndCut]| e.first().map_or(CutEnd { angle: 0.0, towards: 0.0 }, |c| CutEnd { angle: c.angle, towards: c.towards });
-        let mut pair = [end(&c.ends[0]), end(&c.ends[1])];
-        if pair[1].angle > pair[0].angle {
+        let end = |e: &[frame::EndCut], cope: bool| {
+            e.first().map_or(CutEnd { angle: 0.0, towards: 0.0, cope }, |c| CutEnd { angle: c.angle, towards: c.towards, cope })
+        };
+        let mut pair = [end(&c.ends[0], c.coped[0]), end(&c.ends[1], c.coped[1])];
+        if (pair[1].cope, pair[1].angle) > (pair[0].cope, pair[0].angle) {
             pair.swap(0, 1);
         }
         keys.push(key);
@@ -518,15 +522,26 @@ fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The cut list as comma-separated text, a header line first; lengths in mm, angles in degrees,
 /// masses in kg.
+/// How a cut-list end reads in the CSV: `cope`, `angled` or `square`.
+fn end_kind(e: &CutEnd) -> &'static str {
+    if e.cope {
+        "cope"
+    } else if e.angle > 0.0 {
+        "angled"
+    } else {
+        "square"
+    }
+}
+
 pub(crate) fn cut_list_csv(items: &[CutItem]) -> String {
     let field = |t: &str| if t.contains([',', '"', '\n']) { format!("\"{}\"", t.replace('"', "\"\"")) } else { t.to_string() };
     let mut out = String::from(
-        "Item,Qty,Description,Length (mm),Short length (mm),Angle 1 (deg),Angle 2 (deg),Material,Mass each (kg),Total mass (kg),Members\n",
+        "Item,Qty,Description,Length (mm),Short length (mm),Angle 1 (deg),Angle 2 (deg),End 1,End 2,Material,Mass each (kg),Total mass (kg),Members\n",
     );
     for i in items {
         let mass = |m: Option<f64>| m.map_or_else(String::new, |m| format!("{:.3}", m / 1000.0));
         out.push_str(&format!(
-            "{},{},{},{:.2},{:.2},{:.2},{:.2},{},{},{},{}\n",
+            "{},{},{},{:.2},{:.2},{:.2},{:.2},{},{},{},{},{},{}\n",
             i.item,
             i.quantity,
             field(&i.description),
@@ -534,6 +549,8 @@ pub(crate) fn cut_list_csv(items: &[CutItem]) -> String {
             i.short_length,
             i.ends[0].angle,
             i.ends[1].angle,
+            end_kind(&i.ends[0]),
+            end_kind(&i.ends[1]),
             field(&i.material),
             mass(i.mass_each_g),
             mass(i.mass_each_g.map(|m| m * i.quantity as f64)),
@@ -557,6 +574,7 @@ fn junctions(s: &mut Session, p: &Value) -> Result<Value> {
         Treatment::None => TreatmentParam::None,
         Treatment::Mitre => TreatmentParam::Mitre,
         Treatment::Butt => TreatmentParam::Butt,
+        Treatment::Cope => TreatmentParam::Cope,
     };
     let junctions = found
         .into_iter()

@@ -486,7 +486,11 @@ adds its one pending format file.
    markers and the corner panel (`corner_overrides`: per corner treatment, through member and
    weld gap; Ctrl/Shift-click markers to set several at once). Screenshots in the PR, as
    AGENTS.md requires.
-5. **Cope**, and multi-member junction ranking.
+5. **Cope**, and multi-member junction ranking (built on branch `frame-profile-library`).
+   `Treatment::Cope`: the butting end runs to a plane halfway through the through member and is
+   cut by the through member's outline (holes filled) grown by the gap (`kernel::grown_loop`) and
+   extruded along it, a kernel boolean; the cut list marks coped ends and takes their shortest
+   length at the through member's near face.
 6. **Trim/Extend.**
 7. **Cut list** and its export, stable numbers, Browser folder. Built on branch
    `frame-profile-library`: `frame.cut_list` (items grouped by section, both lengths and end

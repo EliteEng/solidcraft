@@ -61,15 +61,19 @@ fn number(v: &Value) -> f64 {
 fn cells(app: &SolveApp, item: &Value) -> [String; 7] {
     // To a hundredth of a millimetre, in the design's units.
     let length = |v: &Value| crate::canvas::format_len_drag(&app.session.doc, number(v), 0.01, 2);
-    let angle = |v: &Value| format!("{:.1}°", number(v));
+    // A coped end reads `cope` after its angle.
+    let angle = |v: &Value| {
+        let a = format!("{:.1}°", number(&v["angle"]));
+        if v["cope"].as_bool() == Some(true) { format!("{a} {}", solidcraft_ui_text::tr("ui.frame_corner_cope")) } else { a }
+    };
     let mass = item["mass_each_g"].as_f64().map_or_else(String::new, |g| format!("{:.3} kg", g / 1000.0));
     [
         item["quantity"].to_string(),
         item["description"].as_str().unwrap_or_default().to_string(),
         length(&item["length"]),
         length(&item["short_length"]),
-        angle(&item["ends"][0]["angle"]),
-        angle(&item["ends"][1]["angle"]),
+        angle(&item["ends"][0]),
+        angle(&item["ends"][1]),
         mass,
     ]
 }

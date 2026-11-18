@@ -115,7 +115,8 @@ pub struct Slot {
 }
 
 /// The Corners choices, as `frame.member`'s `corners.treatment` spells them, with their labels.
-pub const CORNERS: [(&str, &str); 3] = [("mitre", "ui.frame_corner_mitre"), ("butt", "ui.frame_corner_butt"), ("none", "ui.frame_corner_none")];
+pub const CORNERS: [(&str, &str); 4] =
+    [("mitre", "ui.frame_corner_mitre"), ("butt", "ui.frame_corner_butt"), ("none", "ui.frame_corner_none"), ("cope", "ui.frame_corner_cope")];
 
 /// The Runs through choices, as `corners.butt_through` spells them, with their labels.
 pub const BUTT_THROUGH: [(&str, &str); 2] = [("longer", "ui.frame_through_longer"), ("shorter", "ui.frame_through_shorter")];
@@ -247,7 +248,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut 
         enter |= hint_row(ui, "ui.frame_weld_gap", &mut m.gap, "0 mm");
         form_row(ui, "ui.frame_butt_flush", |ui| check(ui, &mut m.flush));
     }
-    if CORNERS.get(m.corner).is_some_and(|c| c.0 == "butt") {
+    if CORNERS.get(m.corner).is_some_and(|c| c.0 == "butt" || c.0 == "cope") {
         let labels: Vec<&str> = BUTT_THROUGH.iter().map(|c| tr(c.1)).collect();
         choice_row(ui, "ui.frame_butt_through", "frame_butt_through", &mut m.through, &labels);
     }
@@ -1162,6 +1163,7 @@ fn treatment_options(mitre: bool) -> Vec<(&'static str, Option<Treatment>)> {
         options.push(("ui.frame_corner_mitre", Some(Treatment::Mitre)));
     }
     options.push(("ui.frame_corner_butt", Some(Treatment::Butt)));
+    options.push(("ui.frame_corner_cope", Some(Treatment::Cope)));
     options.push(("ui.frame_corner_none", Some(Treatment::None)));
     options
 }

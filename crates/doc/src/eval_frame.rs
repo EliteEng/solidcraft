@@ -53,6 +53,9 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
                 None => return Err(DocError::Invalid(format!("junction `{junction}` cuts away the whole member on line `{id}` (try butt or none)"))),
             };
         }
+        for cope in &c.copes {
+            body = cope_member(body, cope, &placed, id)?;
+        }
         made.push(crate::lineage::numbered_tool(body));
     }
     if !f.body_names.is_empty() {
@@ -72,6 +75,33 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
         st.bodies.push(ModelBody::traced_new(name, t, f.id));
     }
     Ok(())
+}
+
+/// Member `body` (on line `id`) trimmed by `cope`: the through member's outline, holes filled and
+/// grown by the gap, run along its line either side of the junction.
+fn cope_member(body: kernel::Body, cope: &frame_corner::Cope, placed: &[frame_corner::Placed], id: &str) -> Result<kernel::Body> {
+    let j = &cope.junction;
+    let t = placed.get(cope.through).ok_or_else(|| DocError::Invalid(format!("junction `{j}`: no member to cope round")))?;
+    let along = (t.b - t.a).normalized().ok_or_else(|| DocError::Invalid(format!("junction `{j}`: the member to cope round has no length")))?;
+    let foot = t.a + along * (cope.at - t.a).dot(along);
+    let plane = Plane::new(foot - t.x * t.at.x - t.y * t.at.y, t.x, t.y)
+        .ok_or_else(|| DocError::Invalid(format!("junction `{j}`: no plane square to the member to cope round")))?;
+    let outline = t
+        .regions
+        .iter()
+        .map(|r| kernel::grown_loop(&r.outer, cope.gap).map(|outer| Region2 { outer, holes: Vec::new() }))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| DocError::Invalid(format!("junction `{j}`: the cope's outline: {e}")))?;
+    let tools = kernel::extrude(&plane, &outline, -cope.reach, cope.reach)?;
+    let mut body = body;
+    for tool in &tools {
+        body = match kernel::boolean(&body, tool, kernel::BoolOp::Cut)? {
+            Some(b) if b.lumps().map_or(1, |l| l.len()) <= 1 => b,
+            Some(_) => return Err(DocError::Invalid(format!("junction `{j}`: the cope cuts the member on line `{id}` in two (try butt)"))),
+            None => return Err(DocError::Invalid(format!("junction `{j}`: the cope cuts away the whole member on line `{id}` (try butt)"))),
+        };
+    }
+    Ok(body)
 }
 
 /// A group's section as its members take it.
@@ -230,6 +260,8 @@ pub struct MemberCut {
     pub short_length: f64,
     /// The cuts at its start and at its end, the most leaning first; none: a square end.
     pub ends: [Vec<EndCut>; 2],
+    /// Whether its start and its end are coped (fitted round another member).
+    pub coped: [bool; 2],
 }
 
 /// The members of frame member feature `f` as built in `st`: each one's lengths and end cuts, in
@@ -259,19 +291,42 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
             }
         };
         let (starts, ends) = (planes(frame_corner::End::Start), planes(frame_corner::End::End));
+        // A coped end is shortest at the near face of what it fits round, not at the plane
+        // through its middle.
+        let near = |end: frame_corner::End, planes: &[frame_corner::Cut]| -> Vec<frame_corner::Cut> {
+            let copes: Vec<&frame_corner::Cope> = c.copes.iter().filter(|k| k.end == end).collect();
+            if copes.is_empty() {
+                return planes.to_vec();
+            }
+            let mut out: Vec<frame_corner::Cut> =
+                c.cuts.iter().filter(|(e, j, _)| *e == end && !copes.iter().any(|k| k.junction == *j)).map(|(_, _, cut)| *cut).collect();
+            out.extend(copes.iter().map(|k| k.near));
+            out
+        };
+        let (short_starts, short_ends) = (near(frame_corner::End::Start, &starts), near(frame_corner::End::End, &ends));
         // Along the line, a section point r (square to it) is kept from t_s(r) to t_e(r), each
         // affine in r: the length there is C + r·w, so its extremes are the section's reach.
         let (mut longest, mut shortest) = (f64::INFINITY, f64::INFINITY);
+        let length_between = |s: &frame_corner::Cut, e: &frame_corner::Cut| -> Option<(f64, Vec3)> {
+            let (ds, de) = (d.dot(s.normal), d.dot(e.normal));
+            if ds.abs() < 1e-12 || de.abs() < 1e-12 {
+                return None;
+            }
+            let c0 = (e.origin - l.a).dot(e.normal) / de - (s.origin - l.a).dot(s.normal) / ds;
+            Some((c0, s.normal * (1.0 / ds) - e.normal * (1.0 / de)))
+        };
         for s in &starts {
             for e in &ends {
-                let (ds, de) = (d.dot(s.normal), d.dot(e.normal));
-                if ds.abs() < 1e-12 || de.abs() < 1e-12 {
-                    continue;
+                if let Some((c0, w)) = length_between(s, e) {
+                    longest = longest.min(c0 + p.reach(w));
                 }
-                let c0 = (e.origin - l.a).dot(e.normal) / de - (s.origin - l.a).dot(s.normal) / ds;
-                let w = s.normal * (1.0 / ds) - e.normal * (1.0 / de);
-                longest = longest.min(c0 + p.reach(w));
-                shortest = shortest.min(c0 - p.reach(-w));
+            }
+        }
+        for s in &short_starts {
+            for e in &short_ends {
+                if let Some((c0, w)) = length_between(s, e) {
+                    shortest = shortest.min(c0 - p.reach(-w));
+                }
             }
         }
         if !longest.is_finite() || !shortest.is_finite() {
@@ -305,6 +360,7 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
             length: longest,
             short_length: shortest,
             ends: [end_cuts(&starts, d), end_cuts(&ends, -d)],
+            coped: [frame_corner::End::Start, frame_corner::End::End].map(|e| c.copes.iter().any(|k| k.end == e)),
         });
     }
     Ok(out)
@@ -503,10 +559,9 @@ pub fn junctions_on(
                 treatment: set.treatment,
                 gap: set.gap,
                 butt_cut: set.butt_cut,
-                through: (set.treatment == frame_corner::Treatment::Butt
-                    && matches!(j.kind, frame_corner::JunctionKind::L | frame_corner::JunctionKind::Multi))
-                .then(|| set.rank.first().map(|i| line_id(*i)))
-                .flatten(),
+                through: (set.treatment.runs_through() && matches!(j.kind, frame_corner::JunctionKind::L | frame_corner::JunctionKind::Multi))
+                    .then(|| set.rank.first().map(|i| line_id(*i)))
+                    .flatten(),
                 overridden: over.is_some(),
                 between,
             }

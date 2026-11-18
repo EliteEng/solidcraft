@@ -3411,3 +3411,20 @@ fn whole_edge_keeps_corners_tangent_arcs_and_authored_splits_apart() {
         assert_eq!(whole_edge(&capped, e), ring, "ring {ring:?}");
     }
 }
+
+/// `grown_loop` grows a loop outwards whichever way it runs: a square's sides move out with
+/// square corners, a circle's radius grows, a rounded square keeps its centres; a negative
+/// distance shrinks, and a hostile distance is an error.
+#[test]
+fn grown_loops_move_their_sides_out() {
+    let square = rect(10.0, 10.0).outer;
+    for lp in [square.clone(), square.reversed()] {
+        let g = grown_loop(&lp, 1.0).unwrap();
+        assert!(g.is_ccw() && rel(g.signed_area(), 144.0) < 1e-9, "{}", g.signed_area());
+    }
+    let shrunk = grown_loop(&square, -1.0).unwrap();
+    assert!(rel(shrunk.signed_area(), 64.0) < 1e-9, "{}", shrunk.signed_area());
+    let circle = grown_loop(&Loop2::circle(Vec2::ZERO, 5.0), 2.0).unwrap();
+    assert!(rel(circle.signed_area(), PI * 49.0) < 1e-9, "{}", circle.signed_area());
+    assert!(grown_loop(&square, f64::NAN).is_err());
+}

@@ -33,11 +33,19 @@ pub enum Treatment {
     Mitre,
     /// One member runs through; the other stops at its face.
     Butt,
+    /// One member runs through; the other is cut to fit round it: trimmed by the through member's
+    /// outline (holes filled), grown by the gap and run along the through member.
+    Cope,
 }
 
 impl Treatment {
     pub fn is_none(&self) -> bool {
         *self == Treatment::None
+    }
+
+    /// Butt or cope: one member runs through, the others stop at it.
+    pub fn runs_through(&self) -> bool {
+        matches!(self, Treatment::Butt | Treatment::Cope)
     }
 }
 
@@ -409,18 +417,40 @@ pub struct Settings {
     pub rank: Vec<usize>,
 }
 
+/// A cope: the end of a member is trimmed by member `through`'s outline (its holes filled) grown
+/// by `gap`, run along `through`'s line `reach` either side of point `at` on it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cope {
+    pub end: End,
+    pub junction: String,
+    pub through: usize,
+    pub gap: f64,
+    pub at: Vec3,
+    pub reach: f64,
+    /// The plane at the through member's near face, less the gap: where the coped end is
+    /// shortest.
+    pub near: Cut,
+}
+
 /// How a member is made: run from `ext[0]` before its start to `ext[1]` past its end, then cut by
-/// each of `cuts`.
+/// each of `cuts`, then trimmed by each of `copes`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MemberCuts {
     pub ext: [f64; 2],
     pub cuts: Vec<(End, String, Cut)>,
+    pub copes: Vec<Cope>,
 }
 
 impl MemberCuts {
     pub fn is_plain(&self) -> bool {
-        self.cuts.is_empty() && self.ext == [0.0, 0.0]
+        self.cuts.is_empty() && self.copes.is_empty() && self.ext == [0.0, 0.0]
     }
+}
+
+/// One thing a junction does to a member end.
+enum Piece {
+    Plane(usize, End, Cut),
+    Cope(usize, Cope),
 }
 
 /// The cuts every member gets at `junctions`, with `settings` for each.
@@ -431,9 +461,18 @@ pub fn member_cuts(members: &[Placed], junctions: &[Junction], settings: impl Fn
         if set.treatment.is_none() {
             continue;
         }
-        for (i, end, cut) in junction_cuts(members, j, &set)? {
-            if let Some(m) = out.get_mut(i) {
-                m.cuts.push((end, j.id.clone(), cut));
+        for piece in junction_cuts(members, j, &set)? {
+            match piece {
+                Piece::Plane(i, end, cut) => {
+                    if let Some(m) = out.get_mut(i) {
+                        m.cuts.push((end, j.id.clone(), cut));
+                    }
+                }
+                Piece::Cope(i, cope) => {
+                    if let Some(m) = out.get_mut(i) {
+                        m.copes.push(cope);
+                    }
+                }
             }
         }
     }
@@ -473,8 +512,8 @@ fn other(e: End) -> End {
     }
 }
 
-/// The cuts one junction makes, as (member, end, cut).
-fn junction_cuts(members: &[Placed], j: &Junction, set: &Settings) -> Result<Vec<(usize, End, Cut)>> {
+/// The cuts one junction makes.
+fn junction_cuts(members: &[Placed], j: &Junction, set: &Settings) -> Result<Vec<Piece>> {
     let into = |(i, e): (usize, End)| -> Result<Vec3> {
         members.get(i).and_then(|p| p.line().inward(e)).ok_or_else(|| DocError::Invalid(format!("junction `{}`: a member there has no length", j.id)))
     };
@@ -487,7 +526,7 @@ fn junction_cuts(members: &[Placed], j: &Junction, set: &Settings) -> Result<Vec
             if g > 0.0 {
                 for &end in &j.ends {
                     let u = into(end)?;
-                    out.push((end.0, end.1, Cut { origin: n0 + u * (g / 2.0), normal: u }));
+                    out.push(Piece::Plane(end.0, end.1, Cut { origin: n0 + u * (g / 2.0), normal: u }));
                 }
             }
         }
@@ -495,28 +534,29 @@ fn junction_cuts(members: &[Placed], j: &Junction, set: &Settings) -> Result<Vec
             let [p, q] = j.ends.as_slice() else { return Ok(out) };
             let (u, v) = (into(*p)?, into(*q)?);
             let n = (u - v).normalized().ok_or_else(|| DocError::Invalid(format!("junction `{}`: the members run back along each other", j.id)))?;
-            out.push((p.0, p.1, Cut { origin: n0 + n * (g / 2.0), normal: n }));
-            out.push((q.0, q.1, Cut { origin: n0 - n * (g / 2.0), normal: -n }));
+            out.push(Piece::Plane(p.0, p.1, Cut { origin: n0 + n * (g / 2.0), normal: n }));
+            out.push(Piece::Plane(q.0, q.1, Cut { origin: n0 - n * (g / 2.0), normal: -n }));
         }
         JunctionKind::L => {
             let [p, q] = j.ends.as_slice() else { return Ok(out) };
             let (t, b) = if set.rank.first() == Some(&q.0) { (*q, *p) } else { (*p, *q) };
             let (ut, ub) = (into(t)?, into(b)?);
             let (mt, mb) = (member(t.0)?, member(b.0)?);
-            out.push((b.0, b.1, butt(mt, ut, mb, ub, n0, g, set.butt_cut, &j.id)?));
+            stop(&mut out, set, (t.0, mt, ut), (b, mb, ub), n0, &j.id)?;
             // The through member runs on to the butting member's far face.
             let away =
                 (-ut - ub * (-ut).dot(ub)).normalized().ok_or_else(|| DocError::Invalid(format!("junction `{}`: the members are in line", j.id)))?;
-            out.push((t.0, t.1, Cut { origin: n0 + away * mb.reach(away), normal: -away }));
+            out.push(Piece::Plane(t.0, t.1, Cut { origin: n0 + away * mb.reach(away), normal: -away }));
         }
         JunctionKind::T => {
-            let span = j.span.and_then(|s| members.get(s)).ok_or_else(|| DocError::Invalid(format!("junction `{}`: no member it lands on", j.id)))?;
+            let s = j.span.ok_or_else(|| DocError::Invalid(format!("junction `{}`: no member it lands on", j.id)))?;
+            let span = member(s)?;
             let along = (span.b - span.a)
                 .normalized()
                 .ok_or_else(|| DocError::Invalid(format!("junction `{}`: the member it lands on has no length", j.id)))?;
             for &end in &j.ends {
                 let ub = into(end)?;
-                out.push((end.0, end.1, butt(span, along, member(end.0)?, ub, n0, g, set.butt_cut, &j.id)?));
+                stop(&mut out, set, (s, span, along), (end, member(end.0)?, ub), n0, &j.id)?;
             }
         }
         JunctionKind::Multi => {
@@ -530,12 +570,43 @@ fn junction_cuts(members: &[Placed], j: &Junction, set: &Settings) -> Result<Vec
                     if ub.dot(ua).abs() >= COLLINEAR_TOL.cos() {
                         continue;
                     }
-                    out.push((end.0, end.1, butt(member(above.0)?, ua, member(end.0)?, ub, n0, g, set.butt_cut, &j.id)?));
+                    stop(&mut out, set, (above.0, member(above.0)?, ua), (end, member(end.0)?, ub), n0, &j.id)?;
                 }
             }
         }
     }
     Ok(out)
+}
+
+/// What stops member end `b` (direction `ub` from `n0` into it) at member `t` (along `ut`): at a
+/// butt, the plane at `t`'s face; at a cope, a plane through the middle of `t` (so `b` reaches
+/// round it) and `t`'s outline cut out of it.
+fn stop(
+    out: &mut Vec<Piece>,
+    set: &Settings,
+    (ti, t, ut): (usize, &Placed, Vec3),
+    (b, mb, ub): ((usize, End), &Placed, Vec3),
+    n0: Vec3,
+    id: &str,
+) -> Result<()> {
+    let g = set.gap.max(0.0);
+    if set.treatment != Treatment::Cope {
+        out.push(Piece::Plane(b.0, b.1, butt(t, ut, mb, ub, n0, g, set.butt_cut, id)?));
+        return Ok(());
+    }
+    let m = (ub - ut * ub.dot(ut)).normalized().ok_or_else(|| DocError::Invalid(format!("junction `{id}`: the members are in line")))?;
+    // Where `t`'s outline is widest across `b` for round and symmetric sections: halfway through it.
+    let mid = (t.reach(m) - t.reach(-m)) / 2.0;
+    out.push(Piece::Plane(b.0, b.1, Cut { origin: n0 + m * mid, normal: m }));
+    // Far enough along `t` either way to take in all of `b` near the junction.
+    let sin = ub.cross(ut).len().max(1e-9);
+    let reach = (mb.radius() + g + t.radius()) / sin + mb.radius() + g + 1.0;
+    if !(reach <= MAX_EXTENSION) {
+        return Err(DocError::Invalid(format!("junction `{id}`: the members are too near parallel for a cope (try butt or none)")));
+    }
+    let near = Cut { origin: n0 + m * (t.reach(m) + g), normal: m };
+    out.push(Piece::Cope(b.0, Cope { end: b.1, junction: id.to_string(), through: ti, gap: g, at: n0, reach, near }));
+    Ok(())
 }
 
 /// The cut that stops member `b` (direction `ub` from `n0` into it) at the face of member `t`

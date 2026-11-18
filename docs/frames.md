@@ -56,9 +56,9 @@ the selected body (or the last body of the active component).
   section) to the library and switch to it. Save as names it (default: after the profile, with
   ` (2)`… if the library has that name already); Category files it, `/` between levels
   (`Steel/RHS`; default: the profile's kind, or Custom for a sketch section).
-- **Corners**: **Mitre** (the default), **Butt** or **None** (square ends that overlap, as members
-  were before corners), with the **Weld gap** left at every junction and **Flush butt cuts**
-  (butting members cut on the face they meet instead of square). With Butt, **Runs through**
+- **Corners**: **Mitre** (the default), **Butt**, **Cope** or **None** (square ends that overlap,
+  as members were before corners), with the **Weld gap** left at every junction and **Flush butt cuts**
+  (butting members cut on the face they meet instead of square). With Butt or Cope, **Runs through**
   picks which pieces run through at every corner: the **Longer** ones (the default) or the
   **Shorter** ones. See Corners. The preference
   **New frame members have square ends** (Preferences › Tools) starts it at None.
@@ -196,6 +196,12 @@ longer or shorter at a junction where three or more meet.
   go by direction (the one nearer the X axis, then Y, counts as longer), so every corner of a
   rectangle or a square goes the same way and the other choice swaps them all. A junction's
   `through` names the member that runs through there, whatever the rule says.
+- **Cope**: one member runs through, as at a butt; the other is cut to fit round it: run on to the
+  middle of the through member, then trimmed by the through member's outline (holes filled) grown
+  by the gap and run along it. A round tube landing on a round tube gets the saddle it needs, and a
+  rectangular tube fits into the rounded corners of the one it meets. The cut list lists a coped
+  end as **cope**, with its longest length to the through member's middle and its shortest to its
+  near face.
 - Cuts are planes worked out from the lines and the sections' exact extents (lines, arcs and cubic
   curves; a drawn section's other curves by their control polygon). There is no smallest angle: a
   corner is refused only when its cut can't be made within its member (it reaches past the

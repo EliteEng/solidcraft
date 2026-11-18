@@ -318,6 +318,25 @@ pub fn torus(center: Vec3, major: f64, minor: f64) -> Result<Body> {
     v.pop().ok_or_else(|| KernelError::Failed("torus".into()))
 }
 
+/// Loop `lp` grown outwards by `d` (shrunk for a negative `d`), whichever way round it runs: each
+/// line moved square to itself, each arc's radius changed, and where moved segments part at a
+/// corner they are carried on along their end tangents to meet ([`offset_loop`]). Arcs must meet
+/// their neighbours tangentially. The result runs counter-clockwise.
+pub fn grown_loop(lp: &Loop2, d: f64) -> Result<Loop2> {
+    if !d.is_finite() {
+        return Err(KernelError::Invalid("the offset must be a number".into()));
+    }
+    let ccw = if lp.is_ccw() { lp.clone() } else { lp.reversed() };
+    if d == 0.0 {
+        return Ok(ccw);
+    }
+    let segs: Vec<Seg2> = offset_loop(&ccw, d)?.into_iter().flatten().collect();
+    if segs.is_empty() {
+        return Err(KernelError::Invalid("the offset closes the loop".into()));
+    }
+    Ok(Loop2 { segs })
+}
+
 /// Offset every segment of a loop to its right by `d` (outward for a region's outer loop and
 /// holes alike), each segment as one of the same kind (`None`: a line the offset swallows, whose
 /// neighbours now meet at one point). Loops of arcs on one circle, and loops of lines, arcs and
