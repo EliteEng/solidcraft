@@ -70,6 +70,7 @@ pub mod dialogs_surface;
 pub mod dialogs_sweep;
 mod dialogs_thread;
 pub mod dialogs_view_dxf;
+pub mod dialogs_weldment;
 pub mod dim_view;
 #[cfg(test)]
 mod dimension_create_ui_tests;

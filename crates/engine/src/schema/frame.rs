@@ -1078,6 +1078,17 @@ pub struct CutEnd {
     pub cope: bool,
 }
 
+/// The welds of one size in the cut list.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct CutWeld {
+    /// The fillet's leg (mm).
+    pub size: f64,
+    /// The length welded (mm): both sides counted, stitches only.
+    pub length: f64,
+    /// Their mass (g): size² / 2 times the length, times the welded members' density.
+    pub mass_g: f64,
+}
+
 /// One cut-list item: identical members (same section, lengths and end cuts, either way round).
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct CutItem {
@@ -1115,7 +1126,11 @@ pub struct CutStock {
 pub struct CutListResult {
     pub items: Vec<CutItem>,
     pub stock: Vec<CutStock>,
-    /// Every member's mass added up (g); members whose mass isn't known are left out.
+    /// The welds on these members, by size.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub welds: Vec<CutWeld>,
+    /// Every member's mass and every weld's added up (g); members whose mass isn't known are left
+    /// out.
     pub total_mass_g: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<String>,

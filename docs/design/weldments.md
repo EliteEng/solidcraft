@@ -362,10 +362,10 @@ different features, members meeting a plate or a floor, or a tube fitted to a cu
 
 ## 6. End caps, gussets and welds
 
-**End caps** (`frame.end_cap`): pick open member ends of hollow profiles. Settings: thickness,
-inset from the outer edge, chamfered or rounded corners, outward (adds length) or inward (sits
-inside the tube). The cap's outline is the member's end face offset inwards, so it is exact on
-mitred and angled ends too. One body per cap, named after the member.
+**End caps** (`frame.end_cap`, on main since #8606): pick open member ends. Settings: thickness,
+inset from the outer edge, a corner chamfer, outward (adds length) or inward (cuts the member back
+and sits where the end was). One body per cap, named after the member. Still to add: caps on
+mitred and angled ends, rounded corners.
 
 **Gussets** (`frame.gusset`): pick two planar faces of members meeting at a junction. Settings:
 triangular or chamfered, leg lengths `d1` and `d2` (and the chamfer for the chamfered kind),
@@ -491,7 +491,12 @@ adds its one pending format file.
    cut by the through member's outline (holes filled) grown by the gap (`kernel::grown_loop`) and
    extruded along it, a kernel boolean; the cut list marks coped ends and takes their shortest
    length at the through member's near face.
-6. **Trim/Extend.**
+6. **Trim/Extend** (built on branch `frame-profile-library`). `FeatureKind::FrameTrim` with
+   `members` (`TrimEnd`: body and end), one boundary (`plane`, a flat `face`, or a `tool` body to
+   cope by), `gap` and `extend`. Extending unions the line's section from where the corner cut the
+   end back to past the boundary, then cuts there; the cut list takes later trims into account
+   (`later_trims`), measuring body copes on the body (`extent_along`). A gap for a body cope is
+   still to do.
 7. **Cut list** and its export, stable numbers, Browser folder. Built on branch
    `frame-profile-library`: `frame.cut_list` (items grouped by section, both lengths and end
    cuts either way round; stock per profile; mass from exact volume; CSV and JSON export) and the
@@ -499,7 +504,19 @@ adds its one pending format file.
    the cut planes and the section's exact reach, recomputed from the feature (`member_cuts_report`)
    rather than recorded on the result. Still to do: stable item numbers kept in the design
    (`renumber`, `set`), the Browser folder, other weldment bodies, and opposite-hand pairs.
-8. **End caps.** 9. **Gussets.** 10. **Welds.**
+8. **End caps**: main has End Cap (#8606, `crate::end_cap`, `FeatureKind::FrameEndCap` with
+   picked end faces, offset, corner chamfer, outward or inward), so this plan builds on it rather
+   than adding its own. Still to add to it: caps on mitred and angled ends, rounded corners.
+9. **Gussets** (built on branch `frame-profile-library`). `FeatureKind::FrameGusset` (`first`,
+   `second` faces, `shape`, `d1`, `d2`, `thickness`, `chamfer`, `clip`, `offset`). The position
+   across the joint is an `offset` along the faces' line from the picks' midpoint rather than
+   inside/centred/outside; the plate is a prism of the polygon in the plane square to that line.
+10. **Welds** (built on branch `frame-profile-library`). `FeatureKind::FrameWeld` (`edges`, each
+   a body and a point; `size`, `both_sides`, `stitch_length`, `stitch_pitch`). Edges are found
+   again exactly from the B-rep's edge curves; the welded length is summed from them exactly. The
+   view draws beads along them; the cut list gives `welds` per size and adds their mass to the
+   total. Weld mass in the physical properties of the design, other weld kinds and weld symbols
+   in drawings are still to do.
 11. **Member exports for tube lasers and beam lines.** Export one member as a STEP file of its
    solid on its own, placed with its line along X from the origin. Export one member as a
    three-view DXF: the user picks the member's front face and top face (programmatically, face

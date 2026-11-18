@@ -10918,6 +10918,8 @@ pub(crate) mod frame_member;
 mod surface;
 #[path = "eval_thread.rs"]
 mod thread;
+#[path = "eval_weldment.rs"]
+pub(crate) mod weldment;
 use thread::thread_on;
 pub use thread::{ThreadInfo, metric_thread_sizes, parse_metric_thread, suggested_thread, suggested_thread_in};
 
@@ -12795,6 +12797,9 @@ fn eval_feature_kind(
         FeatureKind::FrameEndCap { .. } => crate::end_cap::evaluate(doc, vals, f, st),
         FeatureKind::FrameMemberTurn { .. } => frame_member::check_turn(doc, vals, f, st),
         FeatureKind::FrameMember { .. } => frame_member::evaluate(doc, vals, f, st, warning),
+        FeatureKind::FrameTrim { .. } => weldment::evaluate_trim(doc, vals, f, st),
+        FeatureKind::FrameGusset { .. } => weldment::evaluate_gusset(doc, vals, f, st),
+        FeatureKind::FrameWeld { .. } => weldment::weld_of(vals, f, st).map(|_| ()),
         FeatureKind::BoundingSolid { bodies, margin, contents, margins } => {
             let m = val(vals, margin, Kind::Length)?;
             let side = |i: usize| margins.as_ref().and_then(|ms| ms.get(i)).map_or(Ok(m), |e| val(vals, e, Kind::Length));
@@ -13188,7 +13193,7 @@ impl BodyNames {
 }
 
 /// `base`, or `base (2)`, `base (3)`… if a body already has that name.
-fn unique_body_name(st: &ModelState, base: &str) -> String {
+pub(super) fn unique_body_name(st: &ModelState, base: &str) -> String {
     let base = if base.trim().is_empty() { "Body" } else { base.trim() };
     if st.body(base).is_none() {
         return base.to_string();

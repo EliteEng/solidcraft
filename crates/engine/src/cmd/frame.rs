@@ -21,7 +21,7 @@ use super::{CommandSpec, in_sketch, not_in_sketch};
 use crate::params::{bad, bool_, expr, num, str_, string_list, vec2};
 use crate::schema::features::FeatureResult;
 use crate::schema::frame::{
-    ButtCutParam, CornerOverrides, CornersParam, CreatedIds, CutEnd, CutItem, CutListFormat, CutListParams, CutListResult, CutStock,
+    ButtCutParam, CornerOverrides, CornersParam, CreatedIds, CutEnd, CutItem, CutListFormat, CutListParams, CutListResult, CutStock, CutWeld,
     FrameMemberParams, JunctionOut, JunctionsParams, JunctionsResult, LineId, ProfileInsertParams, ProfileInsertResult, ProfileKindInfo,
     ProfileListParams, ProfileListResult, ProfileOut, ProfilePropertiesParams, ProfilePropertiesResult, ProfileSection, SizeFamilyInfo,
     TreatmentParam,
@@ -421,7 +421,7 @@ fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.model.state();
     // Each member: its cut, body name, material and mass.
     let mut members: Vec<(frame::MemberCut, String, String, Option<f64>)> = Vec::new();
-    for id in features {
+    for &id in &features {
         let Some(f) = s.doc.feature(id) else { continue };
         let cuts = frame::member_cuts_report(&s.doc, &st, f).map_err(|e| bad(cmd, format!("{}: {e}", f.name)))?;
         let bodies: Vec<&solidcraft_doc::ModelBody> = st.bodies.iter().filter(|b| b.feature == id).collect();
@@ -502,9 +502,28 @@ fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
             }),
         }
     }
-    let total_mass_g = items.iter().filter_map(|i| i.mass_each_g.map(|m| m * i.quantity as f64)).sum();
-    let csv = (a.format == Some(CutListFormat::Csv) && a.path.is_none()).then(|| cut_list_csv(&items));
-    let mut out = CutListResult { items, stock, total_mass_g, csv, path: None };
+    // The welds on these features' members, by size.
+    let mut welds: Vec<CutWeld> = Vec::new();
+    for w in frame::welds(&s.doc, &st) {
+        let on_listed = w.bodies.iter().any(|b| st.body(b).is_some_and(|mb| features.contains(&mb.feature)));
+        if !(on_listed || a.feature.is_none()) {
+            continue;
+        }
+        let density = w.bodies.first().map_or(0.0, |b| s.doc.density(b));
+        let mass = w.size * w.size / 2.0 * w.welded * density / 1000.0;
+        match welds.iter_mut().find(|x| rounded(x.size, 4) == rounded(w.size, 4)) {
+            Some(x) => {
+                x.length += w.welded;
+                x.mass_g += mass;
+            }
+            None => welds.push(CutWeld { size: w.size, length: w.welded, mass_g: mass }),
+        }
+    }
+    welds.sort_by(|x, y| x.size.total_cmp(&y.size));
+    let total_mass_g =
+        items.iter().filter_map(|i| i.mass_each_g.map(|m| m * i.quantity as f64)).sum::<f64>() + welds.iter().map(|w| w.mass_g).sum::<f64>();
+    let csv = (a.format == Some(CutListFormat::Csv) && a.path.is_none()).then(|| cut_list_csv(&items, &welds));
+    let mut out = CutListResult { items, stock, welds, total_mass_g, csv, path: None };
     if let Some(path) = a.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         let lower = path.to_ascii_lowercase();
         let as_csv = match a.format {
@@ -513,15 +532,14 @@ fn cut_list(s: &mut Session, p: &Value) -> Result<Value> {
             None if lower.ends_with(".json") => false,
             None => return Err(bad(cmd, "`path` must end in .csv or .json, or give `format`")),
         };
-        let text = if as_csv { cut_list_csv(&out.items) } else { serde_json::to_string_pretty(&out).map_err(|e| bad(cmd, e.to_string()))? };
+        let text =
+            if as_csv { cut_list_csv(&out.items, &out.welds) } else { serde_json::to_string_pretty(&out).map_err(|e| bad(cmd, e.to_string()))? };
         solidcraft_io::vfs::write(path, text.as_bytes()).map_err(|e| crate::EngineError::Other(format!("{path}: {e}")))?;
         out.path = Some(path.to_string());
     }
     frame_reply(cmd, out)
 }
 
-/// The cut list as comma-separated text, a header line first; lengths in mm, angles in degrees,
-/// masses in kg.
 /// How a cut-list end reads in the CSV: `cope`, `angled` or `square`.
 fn end_kind(e: &CutEnd) -> &'static str {
     if e.cope {
@@ -533,7 +551,9 @@ fn end_kind(e: &CutEnd) -> &'static str {
     }
 }
 
-pub(crate) fn cut_list_csv(items: &[CutItem]) -> String {
+/// The cut list as comma-separated text, a header line first; lengths in mm, angles in degrees,
+/// masses in kg. The welds follow under a header of their own.
+pub(crate) fn cut_list_csv(items: &[CutItem], welds: &[CutWeld]) -> String {
     let field = |t: &str| if t.contains([',', '"', '\n']) { format!("\"{}\"", t.replace('"', "\"\"")) } else { t.to_string() };
     let mut out = String::from(
         "Item,Qty,Description,Length (mm),Short length (mm),Angle 1 (deg),Angle 2 (deg),End 1,End 2,Material,Mass each (kg),Total mass (kg),Members\n",
@@ -556,6 +576,12 @@ pub(crate) fn cut_list_csv(items: &[CutItem]) -> String {
             mass(i.mass_each_g.map(|m| m * i.quantity as f64)),
             field(&i.members.join(" ")),
         ));
+    }
+    if !welds.is_empty() {
+        out.push_str("\nWeld size (mm),Length welded (mm),Mass (kg)\n");
+        for w in welds {
+            out.push_str(&format!("{:.2},{:.2},{:.3}\n", w.size, w.length, w.mass_g / 1000.0));
+        }
     }
     out
 }

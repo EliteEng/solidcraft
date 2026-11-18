@@ -352,9 +352,42 @@ pub use crate::eval::frame_member::{
     EndCut, JunctionReport, MemberCut, SectionPreview, feature_junctions, grouped_member_names, junctions_on, library_entry_preview, line_groups_on,
     line_ids_on, member_cuts_report, member_line_ids, member_names, member_turns, section_preview, sketch_point, sketch_section,
 };
+pub use crate::eval::weldment::{MAX_WELD_EDGES, Weld, member_line, welds};
 
 /// Most groups one frame member feature has, its own fields' group included.
 pub const MAX_GROUPS: usize = 64;
+
+/// One end of a frame member that a trim works on: the member's body and which end of its line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
+pub struct TrimEnd {
+    pub body: crate::BodyName,
+    pub end: crate::frame_corner::End,
+}
+
+/// An edge a weld runs along: a body and a point on the edge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
+pub struct WeldEdge {
+    pub body: crate::BodyName,
+    pub point: crate::Position,
+}
+
+/// A gusset's shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GussetShape {
+    /// A triangle with legs `d1` and `d2` along the two faces.
+    #[default]
+    Triangle,
+    /// A triangle with each tip cut back `chamfer` along its leg, the cut parallel to the other
+    /// face.
+    Chamfered,
+}
+
+impl GussetShape {
+    pub fn is_triangle(&self) -> bool {
+        *self == GussetShape::Triangle
+    }
+}
 
 /// A frame member feature's further group of lines (the feature's own fields are its first
 /// group): members with their own profile and placement, whose corners with the other groups'

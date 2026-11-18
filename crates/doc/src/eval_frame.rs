@@ -121,9 +121,9 @@ struct GroupSection {
 }
 
 /// A frame member feature's lines, groups and sections, ready to place.
-struct Prepared {
-    segments: Vec<MemberLine>,
-    group_of: Vec<usize>,
+pub(crate) struct Prepared {
+    pub(crate) segments: Vec<MemberLine>,
+    pub(crate) group_of: Vec<usize>,
     sections: Vec<GroupSection>,
     /// Each line's further turn (radians) from the Rotate steps after the feature
     /// ([`member_turns`]: a step whose angle fails is passed over).
@@ -132,7 +132,7 @@ struct Prepared {
 }
 
 impl Prepared {
-    fn placed(&self) -> Result<Vec<frame_corner::Placed<'_>>> {
+    pub(crate) fn placed(&self) -> Result<Vec<frame_corner::Placed<'_>>> {
         let mut placed = Vec::with_capacity(self.segments.len());
         for (l, g) in self.segments.iter().zip(&self.group_of) {
             let s = self.sections.get(*g).ok_or_else(|| DocError::Invalid(format!("line `{}`: no group {g}", l.id)))?;
@@ -145,7 +145,7 @@ impl Prepared {
 }
 
 /// Work out feature `f`'s member lines (by group) and each group's section as placed.
-fn prepare(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState) -> Result<Prepared> {
+pub(crate) fn prepare(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelState) -> Result<Prepared> {
     let FeatureKind::FrameMember { path_sketch, lines, profile, anchor, locate, point, angle, mirror, body_name, posts_world_x, groups, .. } =
         &f.kind
     else {
@@ -275,8 +275,12 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
     let placed = prepared.placed()?;
     let mut ignored = None;
     let cuts = corner_cuts(&vals, &prepared.segments, &prepared.group_of, &placed, corners, corner_overrides, &mut ignored)?;
+    // The members' bodies, in order, and the trims made to them later in the timeline.
+    let names: Vec<&str> = st.bodies.iter().filter(|b| b.feature == f.id).map(|b| b.name.as_str()).collect();
+    let trims = super::weldment::later_trims(doc, &vals, st, f);
     let mut out = Vec::with_capacity(placed.len());
-    for (((l, p), c), g) in prepared.segments.iter().zip(&placed).zip(&cuts).zip(&prepared.group_of) {
+    for (k, (((l, p), c), g)) in prepared.segments.iter().zip(&placed).zip(&cuts).zip(&prepared.group_of).enumerate() {
+        let name = names.get(k).copied().unwrap_or_default();
         let len = l.a.dist(l.b);
         let d = (l.b - l.a).normalized().ok_or_else(|| DocError::Invalid(format!("line `{}` has no length", l.id)))?;
         // Each end's planes; a square end is the plane square to the line at the end.
@@ -303,7 +307,28 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
             out.extend(copes.iter().map(|k| k.near));
             out
         };
-        let (short_starts, short_ends) = (near(frame_corner::End::Start, &starts), near(frame_corner::End::End, &ends));
+        let (mut short_starts, mut short_ends) = (near(frame_corner::End::Start, &starts), near(frame_corner::End::End, &ends));
+        // A trim's plane takes over its end; a cope by a body is measured on the body.
+        let (mut starts, mut ends) = (starts, ends);
+        let mut coped = [frame_corner::End::Start, frame_corner::End::End].map(|e| c.copes.iter().any(|x| x.end == e));
+        let mut measured = false;
+        for t in trims.iter().filter(|t| t.body == name) {
+            let (long, short, cope) = match t.end {
+                frame_corner::End::Start => (&mut starts, &mut short_starts, &mut coped[0]),
+                frame_corner::End::End => (&mut ends, &mut short_ends, &mut coped[1]),
+            };
+            match t.cut {
+                Some(cut) => {
+                    *long = vec![cut];
+                    *short = vec![cut];
+                    *cope = false;
+                }
+                None => {
+                    *cope = true;
+                    measured = true;
+                }
+            }
+        }
         // Along the line, a section point r (square to it) is kept from t_s(r) to t_e(r), each
         // affine in r: the length there is C + r·w, so its extremes are the section's reach.
         let (mut longest, mut shortest) = (f64::INFINITY, f64::INFINITY);
@@ -333,6 +358,10 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
             longest = len;
             shortest = len;
         }
+        if measured && let Some(b) = st.body(name) {
+            longest = super::weldment::extent_along(&b.body, d)?;
+            shortest = longest;
+        }
         let end_cuts = |cuts: &[frame_corner::Cut], square: Vec3| -> Vec<EndCut> {
             let mut out: Vec<EndCut> = cuts
                 .iter()
@@ -360,7 +389,7 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
             length: longest,
             short_length: shortest,
             ends: [end_cuts(&starts, d), end_cuts(&ends, -d)],
-            coped: [frame_corner::End::Start, frame_corner::End::End].map(|e| c.copes.iter().any(|k| k.end == e)),
+            coped,
         });
     }
     Ok(out)
@@ -439,6 +468,20 @@ pub(super) fn grouped_lines(ss: &SolvedSketch, lines: &[String], groups: &[frame
         return Err(DocError::Invalid(format!("at most {MAX_MEMBERS} members in one feature")));
     }
     Ok((out, group_of))
+}
+
+/// The corner cuts of frame member feature `f`'s members as placed (`placed`, from `prepared`).
+pub(crate) fn feature_cuts(
+    vals: &BTreeMap<String, Value>,
+    f: &Feature,
+    prepared: &Prepared,
+    placed: &[frame_corner::Placed],
+) -> Result<Vec<MemberCuts>> {
+    let FeatureKind::FrameMember { corners, corner_overrides, .. } = &f.kind else {
+        return Err(DocError::Invalid("not a frame member feature".into()));
+    };
+    let mut ignored = None;
+    corner_cuts(vals, &prepared.segments, &prepared.group_of, placed, corners, corner_overrides, &mut ignored)
 }
 
 /// Each member's corner cuts: none when the feature has no corner settings.

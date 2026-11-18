@@ -99,6 +99,20 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             )
         })
         .collect();
+    // The welds, one line per size after the stock.
+    let len = |v: &Value| crate::canvas::format_len_drag(&app.session.doc, number(v), 0.01, 2);
+    let stock: Vec<String> = stock
+        .into_iter()
+        .chain(list["welds"].as_array().into_iter().flatten().map(|w| {
+            format!(
+                "{} {}: {}, {:.3} kg",
+                solidcraft_ui_text::tr("ui.cut_list_weld"),
+                len(&w["size"]),
+                len(&w["length"]),
+                number(&w["mass_g"]) / 1000.0
+            )
+        }))
+        .collect();
     let (mut export, mut pick) = (None, None);
     let closed = crate::ui_kit::Window::new(egui::Id::unique("sc_cut_list"), "bom", solidcraft_ui_text::tr_label("Cut List")).cards(3.0).show_body(
         ctx,

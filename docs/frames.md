@@ -223,6 +223,53 @@ brings it back, and the feature warns that it isn't used. An edit (`timeline.red
 doesn't give `corners` or `corner_overrides` keeps the feature's. A feature saved before corners
 existed has none: its members keep their square ends.
 
+## Trim/Extend
+
+**Trim/Extend** (Weldments › Create) trims or lengthens member ends where the corners of one
+feature don't reach: members of different features, a member meeting a plate or the floor, or a
+tube fitted to another body.
+
+- **Member ends**: pick each member on a face near the end to work on.
+- **Boundary**: a plane or a flat face (the ends are cut on its plane, extended past the face), or
+  a body (the ends are coped by it, as a cope corner is: the member keeps the piece its other end
+  is in).
+- **Gap**: how far short of a plane or face each end stops. A cope by a body has no gap yet.
+- **Extend to the boundary** (on by default): an end that stops short of the boundary is
+  lengthened to meet it first. Its old corner cut goes: the end is made again from the line's
+  section, then cut at the boundary.
+
+The members keep their names, and the cut list takes the new ends: a plane gives the end's angle
+and both lengths; a coped end is listed as **cope** and its length measured on the body.
+`frame.trim` `{members: [{body, end?: start|end, near?: [x,y,z]}], plane? | face?: {body, point}
+| tool?: body, gap?, extend?}` does the same; Edit Feature brings the picks back.
+
+## Gussets
+
+**Gusset** (Weldments › Create) adds a plate in the corner between two flat faces of members that
+meet. Pick a face of each member near where the gusset goes.
+
+- The plate lies square to the line where the two faces' planes meet, centred on the picks (moved
+  along that line by **Offset**). Its legs run along the faces: **Leg along first face** and **Leg
+  along second face** (empty: the same as the first). **Thickness** is the plate's.
+- **Shape**: **Triangle**, or **Chamfered**: each tip cut back by **Chamfer** along its leg, the
+  cut parallel to the other face.
+- **Corner clip** cuts the corner back along each leg, clear of the weld.
+
+Faces that are parallel are refused. Each gusset is a body, `Gusset`, `Gusset (2)`…
+`frame.gusset` `{first: {body, point}, second: {body, point}, d1, d2?, thickness, shape?, chamfer?,
+clip?, offset?}` does the same.
+
+## Welds
+
+**Weld** (Weldments › Create) records fillet welds along picked edges: **Leg size**, **Both sides**,
+and a **Stitch length** with its **Stitch pitch** for a stitch weld (stitches from each edge's
+start, one every pitch while a whole one fits; empty: continuous). A weld changes no body: it is
+drawn along its edges as a bead, and the cut list lists the welds by size with the length welded
+and their mass (size² / 2 × the length welded, at the welded member's density), which the total
+mass includes. Each edge is found again from its point on the exact edge curves when the model
+rebuilds; one that is gone fails the feature. `frame.weld` `{edges: [{body, point}], size,
+both_sides?, stitch_length?, stitch_pitch?}` does the same.
+
 ## Cut list
 
 **Cut List** (Weldments › Inspect) lists what to cut: one item per set of identical members (same
@@ -411,6 +458,10 @@ given larger than the room for it.
 
 ## Commands
 
+- `frame.trim` `{members, plane? | face? | tool?, gap?, extend?}`: see Trim/Extend.
+- `frame.gusset` `{first, second, d1, d2?, thickness, shape?, chamfer?, clip?, offset?}`: see Gussets.
+- `frame.weld` `{edges, size, both_sides?, stitch_length?, stitch_pitch?}`: see Welds; the cut
+  list's `welds` gives `size`, `length` and `mass_g` per size.
 - `frame.cut_list` `{feature?, format?: json|csv, path?}`: the cut list of one frame member
   feature or of all of them: `items` (`item`, `quantity`, `description`, `length` and
   `short_length` in mm, `ends` with each cut's `angle` from square and `towards` (the direction in

@@ -1501,6 +1501,70 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         groups: Vec<crate::frame::MemberGroup>,
     },
+    /// Frame members trimmed or extended to a boundary (weldments, step 6), for ends the
+    /// junctions of one feature don't cover: each end in `members` is cut on a plane (`plane`, or
+    /// the plane of the planar face `face`) or coped by a body (`tool`), `gap` short of it. With
+    /// `extend`, an end short of the boundary is first lengthened to meet it. The members keep
+    /// their names, and the cut list shows the new ends.
+    FrameTrim {
+        members: Vec<crate::frame::TrimEnd>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plane: Option<PlaneRef>,
+        #[walk(picks_faces)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        face: Option<FaceAt>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<BodyName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Gap")]
+        gap: Option<Expr>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        extend: bool,
+    },
+    /// A gusset plate between two flat faces of members that meet (weldments, step 9): in the
+    /// plane square to the line where the faces' planes meet, its legs `d1` along the first face
+    /// and `d2` along the second, `thickness` thick, centred on the picks (moved `offset` along
+    /// that line). `clip` cuts the corner back for the weld.
+    FrameGusset {
+        #[walk(picks_faces)]
+        first: FaceAt,
+        #[walk(picks_faces)]
+        second: FaceAt,
+        #[serde(default, skip_serializing_if = "crate::frame::GussetShape::is_triangle")]
+        shape: crate::frame::GussetShape,
+        #[walk(length = "Leg 1")]
+        d1: Expr,
+        #[walk(length = "Leg 2")]
+        d2: Expr,
+        #[walk(length = "Thickness")]
+        thickness: Expr,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Chamfer")]
+        chamfer: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Corner clip")]
+        clip: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Offset")]
+        offset: Option<Expr>,
+    },
+    /// Fillet welds along edges of a weldment (weldments, step 10): `size` the leg, on one side
+    /// of each edge or `both_sides`, continuous or stitched (`stitch_length` every
+    /// `stitch_pitch`). A weld changes no body; it is drawn along its edges and counts towards
+    /// mass and the cut list.
+    FrameWeld {
+        edges: Vec<crate::frame::WeldEdge>,
+        #[walk(length = "Size")]
+        size: Expr,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        both_sides: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Stitch length")]
+        stitch_length: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Stitch pitch")]
+        stitch_pitch: Option<Expr>,
+    },
     /// Raise or sink profiles on a planar face, or wrap them on a selected cylindrical wall.
     Emboss {
         sketch: SketchId,
@@ -3209,6 +3273,9 @@ impl FeatureKind {
             FeatureKind::FrameEndCap { .. } => "EndCapFeature",
             FeatureKind::FrameMemberTurn { .. } => "MemberTurnFeature",
             FeatureKind::FrameMember { .. } => "FrameMemberFeature",
+            FeatureKind::FrameTrim { .. } => "FrameTrimFeature",
+            FeatureKind::FrameGusset { .. } => "FrameGussetFeature",
+            FeatureKind::FrameWeld { .. } => "FrameWeldFeature",
             FeatureKind::Emboss { .. } => "EmbossFeature",
             FeatureKind::Boss { .. } => "BossFeature",
             FeatureKind::Lip { groove: false, .. } => "LipFeature",
@@ -3296,6 +3363,9 @@ impl FeatureKind {
             FeatureKind::FrameEndCap { .. } => "frame_end_cap",
             FeatureKind::FrameMemberTurn { .. } => "frame_member_turn",
             FeatureKind::FrameMember { .. } => "frame_member",
+            FeatureKind::FrameTrim { .. } => "frame_trim",
+            FeatureKind::FrameGusset { .. } => "frame_gusset",
+            FeatureKind::FrameWeld { .. } => "frame_weld",
             FeatureKind::Emboss { .. } => "emboss",
             FeatureKind::Rib { .. } => "rib",
             FeatureKind::ReplaceFace { .. } => "replace_face",
@@ -3473,6 +3543,9 @@ impl FeatureKind {
             FeatureKind::FrameEndCap { .. } => "EndCap",
             FeatureKind::FrameMemberTurn { .. } => "Rotate",
             FeatureKind::FrameMember { .. } => "Member",
+            FeatureKind::FrameTrim { .. } => "Trim",
+            FeatureKind::FrameGusset { .. } => "Gusset",
+            FeatureKind::FrameWeld { .. } => "Weld",
             FeatureKind::Emboss { .. } => "Emboss",
             FeatureKind::Boss { .. } => "Boss",
             FeatureKind::Lip { groove: false, .. } => "Lip",
