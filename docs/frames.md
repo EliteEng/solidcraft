@@ -270,6 +270,23 @@ mass includes. Each edge is found again from its point on the exact edge curves 
 rebuilds; one that is gone fails the feature. `frame.weld` `{edges: [{body, point}], size,
 both_sides?, stitch_length?, stitch_pitch?}` does the same.
 
+## Member exports for tube lasers and beam lines
+
+Under Weldments › Inspect:
+
+- **Export Member STEP**: pick a member; its solid is written on its own, its line along +X from
+  x = 0 (where the member starts, a mitre included), the section's x and y along Y and Z.
+  `frame.export_member_step` `{body, path?}`.
+- **Export Member DXF**: pick the member's **Top face**, then its **Front face** (square to the
+  top). The DXF holds three views, **Top**, **Front** and **Bottom** (looking up at the face
+  opposite the top), stacked bottom to top with the length along X from x = 0, so each face's
+  cuts and holes line up. They are drawn from the body's exact edges, hidden lines worked out
+  exactly, as lines and arcs only: circular arcs exact, any other curve as arcs within 0.001 mm.
+  Layers: VISIBLE, HIDDEN (dashed, with **Hidden edges**), UNCERTAIN (pieces whose visibility
+  couldn't be decided; normally empty) and LABELS (the view names, left of each view).
+  `frame.export_member_dxf` `{body, top: [x,y,z], front: [x,y,z], hidden?, path?}`; it works on
+  any body with two flat faces square to each other.
+
 ## Cut list
 
 **Cut List** (Weldments › Inspect) lists what to cut: one item per set of identical members (same
@@ -471,6 +488,8 @@ given larger than the room for it.
 
 - `frame.trim` `{members, plane? | face? | tool?, gap?, extend?}`: see Trim/Extend.
 - `frame.gusset` `{first, second, d1, d2?, thickness, shape?, chamfer?, clip?, offset?}`: see Gussets.
+- `frame.export_member_step` `{body, path?}` and `frame.export_member_dxf` `{body, top, front, hidden?,
+  path?}`: see Member exports.
 - `frame.weld` `{edges, size, both_sides?, stitch_length?, stitch_pitch?}`: see Welds; the cut
   list's `welds` gives `size`, `length` and `mass_g` per size.
 - `frame.cut_list` `{feature?, format?: json|csv, path?}`: the cut list of one frame member

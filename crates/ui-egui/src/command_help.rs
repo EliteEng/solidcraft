@@ -72,6 +72,8 @@ pub const DOCUMENTED: &[&str] = &[
     "file.send_to_slicer",
     "frame.cut_list",
     "frame.end_cap",
+    "frame.export_member_dxf",
+    "frame.export_member_step",
     "frame.gusset",
     "frame.member",
     "frame.rotate_member",

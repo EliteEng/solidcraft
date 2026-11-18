@@ -248,3 +248,53 @@ fn bad_welds_are_refused_with_the_reason() {
     assert!(err(&mut s, json!({"edges": edge, "size": 0})).contains("size"));
     assert!(err(&mut s, json!({"edges": [{"body": "Rail", "point": [300, 0, 0]}], "size": 5})).contains("no edge"));
 }
+
+/// A post exported as STEP lies along X from 0, its section across Y and Z; the file reads back.
+#[test]
+fn a_member_exports_as_step_along_x_from_zero() {
+    let mut s = Session::default();
+    rectangle(&mut s);
+    let post = body_at(&mut s, [580.0, 200.0, 0.0]);
+    let out = run(&mut s, "frame.export_member_step", json!({"body": post}));
+    assert!((f(&out["length"]) - 440.0).abs() < 1e-6, "a mitred 400 mm post of 40 mm tube: {}", out["length"]);
+    let text = out["text"].as_str().unwrap();
+    assert!(text.starts_with("ISO-10303-21"), "{}", &text[..40.min(text.len())]);
+    let back = crate::kernel::step_import(text).unwrap();
+    let bb = back.bodies[0].body.exact_bounds().unwrap();
+    assert!((bb.min.x).abs() < 1e-6 && (bb.max.x - 440.0).abs() < 1e-6, "{bb:?}");
+    assert!((bb.max.y - bb.min.y - 40.0).abs() < 1e-6 && (bb.max.z - bb.min.z - 40.0).abs() < 1e-6, "{bb:?}");
+    assert!(s.execute("frame.export_member_step", &json!({"body": "nope"})).unwrap_err().to_string().contains("no body"));
+}
+
+/// A rail with a hole drilled through its top: the DXF has Top, Front and Bottom views stacked,
+/// the length along X, the hole's circle in the top and bottom views, and the mitres' slopes in the
+/// front view; lines and arcs only, no mesh.
+#[test]
+fn a_member_exports_as_a_dxf_of_its_top_front_and_bottom() {
+    let mut s = Session::default();
+    rectangle(&mut s);
+    let rail = body_at(&mut s, [300.0, 20.0, 0.0]);
+    run(&mut s, "solid.hole", json!({"position": [300, 0, 20], "direction": [0, 0, -1], "diameter": 10, "depth": 40}));
+    let out = s.execute("frame.export_member_dxf", &json!({"body": rail, "top": [300, 0, 20], "front": [300, -20, 0]}));
+    let out = match out {
+        Ok(v) => v,
+        Err(e) => panic!("{e}"),
+    };
+    assert!((f(&out["length"]) - 640.0).abs() < 1e-6, "{}", out["length"]);
+    let views: Vec<&str> = out["views"].as_array().unwrap().iter().map(|v| v["view"].as_str().unwrap()).collect();
+    assert_eq!(views, ["top", "front", "bottom"]);
+    // Stacked: the bottom view lowest, the top highest.
+    let at = |k: usize| f(&out["views"][k]["at"][1]);
+    assert!(at(2) < at(1) && at(1) < at(0), "{}", out["views"]);
+    let text = out["text"].as_str().unwrap();
+    let kinds: std::collections::BTreeMap<&str, usize> =
+        text.lines().collect::<Vec<_>>().windows(2).filter(|w| w[0].trim() == "0").fold(Default::default(), |mut m, w| {
+            *m.entry(w[1].trim()).or_default() += 1;
+            m
+        });
+    assert!(kinds.contains_key("CIRCLE") || kinds.contains_key("ARC"), "the hole is drawn as a circle: {kinds:?}");
+    assert!(!kinds.contains_key("ELLIPSE") && !kinds.contains_key("SPLINE"), "lines and arcs only: {kinds:?}");
+    assert!(text.contains("TOP") && text.contains("FRONT") && text.contains("BOTTOM"));
+    let e = s.execute("frame.export_member_dxf", &json!({"body": rail, "top": [300, 0, 20], "front": [300, 0, 20]})).unwrap_err().to_string();
+    assert!(e.contains("square"), "{e}");
+}

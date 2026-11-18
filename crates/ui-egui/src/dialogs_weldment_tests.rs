@@ -115,3 +115,29 @@ fn gusset_and_weld_take_their_picks_and_come_back_when_editing() {
     assert!(matches!(&e.kind, Kind::Weld(Wd::Weld { both_sides: true, .. })), "{:?}", e.kind);
     assert!(matches!(e.inputs[0].items.first(), Some(Sel::Edge { body, .. }) if body == "Gusset"));
 }
+
+/// Export Member DXF takes the top and front faces of one member; picks on two members, or one
+/// face, are refused with the reason. Export Member STEP takes the member.
+#[test]
+fn member_exports_take_their_picks() {
+    let mut app = rail_and_post();
+    let face = |app: &SolveApp, p: [f64; 3]| crate::dialogs::face_sel(&app.session, solidcore_record::Vec3::new(p[0], p[1], p[2])).unwrap();
+    app.start("frame.export_member_dxf");
+    let mut d = app.dialog.clone().unwrap();
+    assert!(matches!(&d.kind, Kind::Weld(k) if k.saves()));
+    d.inputs[0].items = vec![face(&app, [300.0, 0.0, 20.0])];
+    let Kind::Weld(k) = &d.kind else { panic!() };
+    assert!(export_params(k, &d.inputs).unwrap_err().contains("front"));
+    d.inputs[1].items = vec![face(&app, [300.0, -20.0, 0.0])];
+    let p = export_params(k, &d.inputs).unwrap();
+    assert_eq!((p["body"].as_str(), p["hidden"].as_bool()), (Some("Rail"), Some(false)), "{p}");
+    let r = app.session.execute("frame.export_member_dxf", &p).unwrap();
+    assert!(r["text"].as_str().unwrap().contains("ENTITIES"));
+    d.inputs[1].items = vec![face(&app, [650.0, 30.0, 0.0])];
+    assert!(export_params(k, &d.inputs).unwrap_err().contains("same member"));
+    app.start("frame.export_member_step");
+    let mut d = app.dialog.clone().unwrap();
+    d.inputs[0].items = vec![Sel::Body { name: "Post".into() }];
+    let Kind::Weld(k) = &d.kind else { panic!() };
+    assert_eq!(export_params(k, &d.inputs).unwrap(), json!({"body": "Post"}));
+}

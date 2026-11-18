@@ -22,6 +22,10 @@ pub enum Wd {
     Gusset { chamfered: bool, d1: String, d2: String, thickness: String, chamfer: String, clip: String, offset: String },
     /// Weld: edges.
     Weld { size: String, both_sides: bool, stitch_length: String, stitch_pitch: String },
+    /// Export Member STEP: one member.
+    ExportStep,
+    /// Export Member DXF: the top and front faces of one member.
+    ExportDxf { hidden: bool },
 }
 
 impl Wd {
@@ -30,7 +34,14 @@ impl Wd {
             Wd::Trim { .. } => "TRIM/EXTEND",
             Wd::Gusset { .. } => "GUSSET",
             Wd::Weld { .. } => "WELD",
+            Wd::ExportStep => "EXPORT MEMBER STEP",
+            Wd::ExportDxf { .. } => "EXPORT MEMBER DXF",
         }
+    }
+
+    /// OK asks for a file to write, not a feature.
+    pub fn saves(&self) -> bool {
+        matches!(self, Wd::ExportStep | Wd::ExportDxf { .. })
     }
 
     pub fn command(&self) -> &'static str {
@@ -38,6 +49,8 @@ impl Wd {
             Wd::Trim { .. } => "frame.trim",
             Wd::Gusset { .. } => "frame.gusset",
             Wd::Weld { .. } => "frame.weld",
+            Wd::ExportStep => "frame.export_member_step",
+            Wd::ExportDxf { .. } => "frame.export_member_dxf",
         }
     }
 }
@@ -117,6 +130,11 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             };
             Some((Kind::Weld(k), gusset_inputs()))
         }
+        "frame.export_member_step" => Some((Kind::Weld(Wd::ExportStep), vec![SelInput::new("Member", BODIES | FACES, false)])),
+        "frame.export_member_dxf" => Some((
+            Kind::Weld(Wd::ExportDxf { hidden: false }),
+            vec![SelInput::new("Top face", PLANAR_FACES, false), SelInput::new("Front face", PLANAR_FACES, false)],
+        )),
         "frame.weld" => {
             let size = crate::dialogs::length_default(&app.session, "5");
             Some((Kind::Weld(Wd::Weld { size, both_sides: false, stitch_length: String::new(), stitch_pitch: String::new() }), weld_inputs()))
@@ -147,6 +165,13 @@ pub fn rows(_app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Wd, _inputs: &[SelIn
             }
             enter |= hint_row(ui, "ui.frame_gusset_clip", clip, "0 mm");
             enter |= hint_row(ui, "ui.frame_gusset_offset", offset, "0 mm");
+        }
+        Wd::ExportStep => {
+            crate::ui_kit::status_line(ui, tr("ui.frame_export_step.hint"), crate::ui_kit::StatusTone::Dim);
+        }
+        Wd::ExportDxf { hidden } => {
+            crate::ui_kit::status_line(ui, tr("ui.frame_export_dxf.hint"), crate::ui_kit::StatusTone::Dim);
+            form_row(ui, "ui.frame_export_hidden", |ui| check(ui, hidden));
         }
         Wd::Weld { size, both_sides, stitch_length, stitch_pitch } => {
             crate::ui_kit::status_line(ui, tr("ui.frame_weld.hint"), crate::ui_kit::StatusTone::Dim);
@@ -184,6 +209,7 @@ pub fn commands(app: &SolveApp, k: &Wd, inputs: &[SelInput], extra: &Map<String,
             }
             Ok(vec![("frame.gusset".into(), p)])
         }
+        Wd::ExportStep | Wd::ExportDxf { .. } => Ok(vec![(k.command().into(), export_params(k, inputs)?)]),
         Wd::Weld { size, both_sides, stitch_length, stitch_pitch } => {
             let edges: Vec<Value> = inputs
                 .first()
@@ -286,6 +312,34 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
         }
         _ => None,
     }
+}
+
+/// An export's parameters from its picks (without `path`).
+fn export_params(k: &Wd, inputs: &[SelInput]) -> Result<Value, String> {
+    let pick = |i: usize| inputs.get(i).and_then(|x| x.items.first());
+    match k {
+        Wd::ExportStep => match pick(0) {
+            Some(Sel::Body { name }) | Some(Sel::Face { body: name, .. }) => Ok(json!({"body": name})),
+            _ => Err("pick the member to export".into()),
+        },
+        Wd::ExportDxf { hidden } => match (pick(0), pick(1)) {
+            (Some(Sel::Face { body, point, .. }), Some(Sel::Face { body: other, point: front, .. })) if body == other => {
+                Ok(json!({"body": body, "top": pt(*point), "front": pt(*front), "hidden": hidden}))
+            }
+            (Some(Sel::Face { .. }), Some(Sel::Face { .. })) => Err("pick the top and front faces on the same member".into()),
+            _ => Err("pick the member's top face, then its front face".into()),
+        },
+        _ => Err("not an export".into()),
+    }
+}
+
+/// OK of an export: ask where to write it, then write it.
+pub fn run_export(app: &mut SolveApp, k: &Wd, inputs: &[SelInput]) -> Result<(), String> {
+    let params = export_params(k, inputs)?;
+    let body = params["body"].as_str().unwrap_or("member").to_string();
+    let ext = if matches!(k, Wd::ExportStep) { "step" } else { "dxf" };
+    app.pick_save_command(&format!("{body}.{ext}"), &[ext], k.command(), params);
+    Ok(())
 }
 
 thread_local! {

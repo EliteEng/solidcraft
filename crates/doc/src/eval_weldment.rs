@@ -522,3 +522,15 @@ pub fn welds(doc: &Document, st: &ModelState) -> Vec<Weld> {
         .filter_map(|f| weld_of(&vals, f, st).ok())
         .collect()
 }
+
+/// The frame of the member that body `name` is: its line's start, the unit direction along it,
+/// and the section's x and y as placed (so `(along, x, y)` is right-handed), in its feature's
+/// component coordinates.
+pub fn member_frame(doc: &Document, st: &ModelState, name: &str) -> Result<(Vec3, Vec3, Vec3, Vec3)> {
+    let (vals, _) = doc.param_values();
+    let m = member_of(doc, &vals, st, name)?;
+    let placed = m.prepared.placed()?;
+    let p = placed.get(m.index).ok_or_else(|| DocError::Invalid(format!("`{name}` is not a frame member")))?;
+    let d = (p.b - p.a).normalized().ok_or_else(|| DocError::Invalid(format!("the member `{name}` has no length")))?;
+    Ok((p.a, d, p.x, p.y))
+}

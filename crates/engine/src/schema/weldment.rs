@@ -1,5 +1,5 @@
 //! Contracts for the weldment commands in `cmd/weldment.rs` (docs/design/weldments.md): Trim/Extend,
-//! end caps, gussets and welds.
+//! end caps, gussets, welds, and member exports for tube lasers and beam lines.
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -132,4 +132,70 @@ pub struct WeldParams {
     pub stitch_pitch: Option<LengthExpr>,
     #[serde(flatten, deserialize_with = "feature_common")]
     pub common: FeatureCommon,
+}
+
+/// Export one frame member as a STEP file: its solid alone, its line along +X from x = 0 (where
+/// the member starts), the section's x and y along Y and Z.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportMemberStepParams {
+    /// The member's body, by name.
+    pub body: String,
+    /// The `.step` file to write; without it the STEP text is returned.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Export one member as a DXF of three views, Top, Front and Bottom, drawn exactly from its edges
+/// (lines and arcs), stacked with its length along X so each face's cuts and holes line up.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportMemberDxfParams {
+    /// The body, by name (a frame member, or any body with two flat faces square to each other).
+    pub body: String,
+    /// A point on the face the Top view looks at (a flat face).
+    pub top: [f64; 3],
+    /// A point on the face the Front view looks at (a flat face square to the top one).
+    pub front: [f64; 3],
+    /// Also draw hidden edges, dashed on layer HIDDEN. Default: false.
+    #[serde(default)]
+    pub hidden: Option<bool>,
+    /// The `.dxf` file to write; without it the DXF text is returned.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// One view of a member DXF.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, JsonSchema)]
+pub struct MemberView {
+    /// `top`, `front` or `bottom`.
+    pub view: String,
+    /// The view's size on the sheet (mm).
+    pub width: f64,
+    pub height: f64,
+    /// Where its lower left corner is on the sheet (mm).
+    pub at: [f64; 2],
+}
+
+/// A member export's result.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, JsonSchema)]
+pub struct MemberExportResult {
+    /// The file written, with `path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The file's text, without `path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The member's length along X (mm).
+    pub length: f64,
+    /// The DXF's views.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<MemberView>,
+    /// Pieces of edge whose visibility couldn't be decided, drawn on layer UNCERTAIN.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub uncertain: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }

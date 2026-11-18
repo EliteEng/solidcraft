@@ -520,7 +520,9 @@ adds its one pending format file.
    view draws beads along them; the cut list gives `welds` per size and adds their mass to the
    total. Weld mass in the physical properties of the design, other weld kinds and weld symbols
    in drawings are still to do.
-11. **Member exports for tube lasers and beam lines.** Export one member as a STEP file of its
+11. **Member exports for tube lasers and beam lines** (built on branch `frame-profile-library`:
+   `frame.export_member_step`, `frame.export_member_dxf` with `geom::hlr` and arcs fitted to
+   0.001 mm). Export one member as a STEP file of its
    solid on its own, placed with its line along X from the origin. Export one member as a
    three-view DXF: the user picks the member's front face and top face (programmatically, face
    names), and the file holds the top, front and bottom views of the cut member (the bottom looking

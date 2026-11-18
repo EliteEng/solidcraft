@@ -571,7 +571,7 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "WELDMENTS", panel: "CREATE", promoted: 4, ids: &["frame.member", "frame.trim", "frame.end_cap", "frame.gusset", "frame.weld"] },
     Section { tab: "WELDMENTS", panel: "MODIFY", promoted: 1, ids: &["frame.rotate_member"] },
     // What to cut: identical members together, with their lengths and end angles.
-    Section { tab: "WELDMENTS", panel: "INSPECT", promoted: 1, ids: &["frame.cut_list"] },
+    Section { tab: "WELDMENTS", panel: "INSPECT", promoted: 3, ids: &["frame.cut_list", "frame.export_member_step", "frame.export_member_dxf"] },
     Section { tab: "WELDMENTS", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
 ];
 
@@ -732,6 +732,8 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("timeline.dependents", "Dependents"),
     ("view.apply", "Restore View"),
     ("view.save", "Save View"),
+    ("frame.export_member_dxf", "Member DXF"),
+    ("frame.export_member_step", "Member STEP"),
     ("frame.trim", "Trim"),
 ];
 

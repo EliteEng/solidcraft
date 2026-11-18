@@ -352,7 +352,7 @@ pub use crate::eval::frame_member::{
     EndCut, JunctionReport, MemberCut, SectionPreview, feature_junctions, grouped_member_names, junctions_on, library_entry_preview, line_groups_on,
     line_ids_on, member_cuts_report, member_line_ids, member_names, member_turns, section_preview, sketch_point, sketch_section,
 };
-pub use crate::eval::weldment::{MAX_WELD_EDGES, Weld, member_line, welds};
+pub use crate::eval::weldment::{MAX_WELD_EDGES, Weld, member_frame, member_line, welds};
 
 /// Most groups one frame member feature has, its own fields' group included.
 pub const MAX_GROUPS: usize = 64;
