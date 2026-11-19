@@ -3428,3 +3428,18 @@ fn grown_loops_move_their_sides_out() {
     assert!(rel(circle.signed_area(), PI * 49.0) < 1e-9, "{}", circle.signed_area());
     assert!(grown_loop(&square, f64::NAN).is_err());
 }
+
+/// `grown` moves every face of a body out: a 10 mm cube grown by 1 is a 12 mm cube with sharp
+/// edges, and a distance that is not positive is an error.
+#[test]
+fn a_grown_cube_is_bigger_all_round() {
+    let cube = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+    let g = crate::grown(&cube, 1.0).unwrap();
+    let bb = g.exact_bounds().unwrap();
+    assert!((bb.min - Vec3::new(-1.0, -1.0, -1.0)).len() < 1e-6 && (bb.max - Vec3::new(11.0, 11.0, 11.0)).len() < 1e-6, "{bb:?}");
+    let v = measure(&g).unwrap().volume;
+    assert!(rel(v, 1728.0) < 1e-6, "{v}");
+    for d in [0.0, -1.0, f64::NAN] {
+        assert!(crate::grown(&cube, d).is_err(), "{d}");
+    }
+}

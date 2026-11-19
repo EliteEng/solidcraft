@@ -54,9 +54,10 @@ fn trim_extend_takes_member_ends_and_a_boundary_and_comes_back_when_editing() {
     let c = apply_commands(&app, &e).unwrap();
     assert_eq!(c[0].0, "timeline.redefine", "{c:?}");
     assert_eq!(c[0].1["params"]["members"][0], json!({"body": "Rail", "end": "end"}), "{c:?}");
-    // A gap on a cope by a body is refused, with the reason.
-    let err = app.session.execute(&c[0].0, &c[0].1).unwrap_err().to_string();
-    assert!(err.contains("gap"), "{err}");
+    // A gap on a cope by a body keeps the rail that far from the post.
+    app.session.execute(&c[0].0, &c[0].1).unwrap();
+    let f = app.session.doc.features.iter().find(|f| f.id == fid).unwrap();
+    assert!(matches!(&f.kind, FeatureKind::FrameTrim { gap: Some(_), .. }), "{:?}", f.kind);
 }
 
 #[test]

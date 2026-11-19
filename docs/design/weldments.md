@@ -495,8 +495,8 @@ adds its one pending format file.
    `members` (`TrimEnd`: body and end), one boundary (`plane`, a flat `face`, or a `tool` body to
    cope by), `gap` and `extend`. Extending unions the line's section from where the corner cut the
    end back to past the boundary, then cuts there; the cut list takes later trims into account
-   (`later_trims`), measuring body copes on the body (`extent_along`). A gap for a body cope is
-   still to do.
+   (`later_trims`), measuring body copes on the body (`extent_along`). A body cope's gap copes by
+   the body grown that far all round (`kernel::grown`: every face moved out, sharp edges kept).
 7. **Cut list** and its export, stable numbers, Browser folder. Built on branch
    `frame-profile-library`: `frame.cut_list` (items grouped by section, both lengths and end
    cuts either way round; stock per profile; mass from exact volume; CSV and JSON export) and the
@@ -518,8 +518,10 @@ adds its one pending format file.
    a body and a point; `size`, `both_sides`, `stitch_length`, `stitch_pitch`). Edges are found
    again exactly from the B-rep's edge curves; the welded length is summed from them exactly. The
    view draws beads along them; the cut list gives `welds` per size and adds their mass to the
-   total. Weld mass in the physical properties of the design, other weld kinds and weld symbols
-   in drawings are still to do.
+   total. `component.properties` adds each weld's volume and mass to the placement it belongs to
+   (`weld_mass_g`), each edge piece at its exact centroid (lines as thin rods for the inertia).
+   Other weld kinds and weld symbols in drawings are still to do; `assembly.mass_properties`
+   does not count welds yet.
 11. **Member exports for tube lasers and beam lines** (built on branch `frame-profile-library`:
    `frame.export_member_step`, `frame.export_member_dxf` with `geom::hlr` and arcs fitted to
    0.001 mm). Export one member as a STEP file of its

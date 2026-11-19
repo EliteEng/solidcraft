@@ -1004,6 +1004,10 @@ pub struct TotalProperties {
     /// The area of all bodies, closed or not.
     pub area_mm2: f64,
     pub mass_g: f64,
+    /// Of `volume_mm3` and `mass_g`, the welds' (weldment fillet welds, each its triangular
+    /// section along the length welded, at the welded member's density); left out when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weld_mass_g: Option<f64>,
     /// The centre of mass (mm); null when the mass is zero.
     #[schemars(with = "Option<[f64; 3]>")]
     pub center_of_mass: Option<Vec3>,

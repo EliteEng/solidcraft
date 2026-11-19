@@ -194,10 +194,13 @@ fn trim_end(m: &MemberOf, body: &kernel::Body, te: &TrimEnd, boundary: &Boundary
             kernel::half_space(&body, &cut, true)?.0
         }
         Boundary::Body(b) => {
-            if gap > 0.0 {
-                return Err(DocError::Invalid("a cope by a body has no gap yet (set the gap to 0)".into()));
-            }
-            kernel::boolean(&body, b, kernel::BoolOp::Cut)?
+            // With a gap, cope by the body grown that far all round.
+            let tool = if gap > 0.0 {
+                kernel::grown(b, gap).map_err(|err| DocError::Invalid(format!("the trim's gap round the body: {err}")))?
+            } else {
+                b.clone()
+            };
+            kernel::boolean(&body, &tool, kernel::BoolOp::Cut)?
         }
     };
     let kept = kept.ok_or_else(|| DocError::Invalid(format!("the boundary cuts away the whole of `{name}`")))?;
@@ -406,6 +409,45 @@ pub struct Weld {
     /// The bodies its edges are on, in order, each once.
     pub bodies: Vec<String>,
     pub paths: Vec<Vec<Vec3>>,
+    /// The edges' pieces, each once (not doubled for both sides): its exact length, its centre
+    /// (the centroid of the curve) and, for a straight piece, its direction.
+    pub pieces: Vec<WeldPiece>,
+}
+
+/// A piece of a weld's edge, for where its mass is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WeldPiece {
+    pub length: f64,
+    pub centre: Vec3,
+    pub along: Option<Vec3>,
+}
+
+impl Weld {
+    /// The weld's volume (mm³): its triangular section, `size`² / 2, times the length welded.
+    pub fn volume(&self) -> f64 {
+        self.size * self.size / 2.0 * self.welded
+    }
+}
+
+/// Segment `s` as weld pieces: a line or an arc exactly, another curve by its polyline within
+/// 0.01 mm.
+fn weld_pieces(s: &kernel::PathSeg) -> Vec<WeldPiece> {
+    let line = |a: Vec3, b: Vec3| WeldPiece { length: a.dist(b), centre: (a + b) * 0.5, along: (b - a).normalized() };
+    match *s {
+        kernel::PathSeg::Line { a, b } => vec![line(a, b)],
+        kernel::PathSeg::Arc { a, center, axis, angle } => {
+            let r0 = a - center;
+            let radius = r0.len();
+            let (Some(k), Some(x)) = (axis.normalized(), r0.normalized()) else { return Vec::new() };
+            let y = k.cross(x);
+            let half = angle / 2.0;
+            // An arc's centroid is on its bisector, r·sin(θ/2)/(θ/2) from the centre.
+            let reach = if half.abs() > 1e-12 { radius * half.sin() / half } else { radius };
+            let mid = x * half.cos() + y * half.sin();
+            vec![WeldPiece { length: radius * angle.abs(), centre: center + mid * reach, along: None }]
+        }
+        _ => kernel::path_polyline(std::slice::from_ref(s)).map(|pts| pts.windows(2).map(|w| line(w[0], w[1])).collect()).unwrap_or_default(),
+    }
 }
 
 /// Exact distance from `p` to segment `s` (a line or an arc in closed form; another curve by its
@@ -491,6 +533,7 @@ pub(crate) fn weld_of(vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelSta
     let mut welded = 0.0;
     let mut bodies: Vec<String> = Vec::new();
     let mut paths = Vec::with_capacity(edges.len());
+    let mut pieces = Vec::new();
     for (k, e) in edges.iter().enumerate() {
         let b = st.body(&e.body).ok_or_else(|| DocError::Unknown(format!("body `{}`", e.body)))?;
         let path =
@@ -504,12 +547,13 @@ pub(crate) fn weld_of(vals: &BTreeMap<String, Value>, f: &Feature, st: &ModelSta
         if !bodies.contains(&e.body.0) {
             bodies.push(e.body.0.clone());
         }
+        pieces.extend(path.iter().flat_map(weld_pieces));
         paths.push(kernel::path_polyline(&path)?);
     }
     if *both_sides {
         welded *= 2.0;
     }
-    Ok(Weld { feature: f.id, size, welded, bodies, paths })
+    Ok(Weld { feature: f.id, size, welded, bodies, paths, pieces })
 }
 
 /// Every weld feature of the design (not suppressed) as built in `st`; one whose edges can't be

@@ -96,6 +96,12 @@ fn a_member_extended_into_another_body_is_coped_by_it() {
     let list = run(&mut s, "frame.cut_list", json!({"feature": "Member1"}));
     let item = &list["items"][0];
     assert!(item["ends"][0]["cope"] == true && (f(&item["length"]) - want).abs() < 1e-3, "{list}");
+    // With a 2 mm gap the rail is coped by the post grown to 32 mm radius.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "frame.trim", json!({"members": [{"body": "Rail", "end": "end"}], "tool": "Post", "extend": true, "gap": 2}));
+    let (_, hi) = bbox(&mut s, "Rail");
+    let want = 650.0 - (1024.0f64 - 400.0).sqrt();
+    assert!((hi[0] - want).abs() < 1e-3, "with a gap: {hi:?} vs {want}");
 }
 
 #[test]
@@ -216,7 +222,7 @@ fn a_weld_runs_along_edges_and_counts_in_the_cut_list() {
     let mut s = Session::default();
     rail(&mut s);
     let bare = run(&mut s, "frame.cut_list", json!({}));
-    // The rail's top-front edge at y = −20, z = 20 runs between its rounded corners (radius 6),
+    // The edge where the rail's top face meets its rounded front corner (radius 6), y = −14, z = 20,
     // from x = 0 to 600: 600 mm, on both sides, 5 mm leg.
     let made = run(&mut s, "frame.weld", json!({"edges": [{"body": "Rail", "point": [300, -14, 20]}], "size": 5, "both_sides": true}));
     assert!(made["created_bodies"].as_array().unwrap().is_empty(), "a weld makes no body: {made}");
@@ -227,6 +233,18 @@ fn a_weld_runs_along_edges_and_counts_in_the_cut_list() {
     assert!((f(&w["mass_g"]) - 12.5 * 1200.0 * density / 1000.0).abs() < 1e-6, "{list}");
     assert!((f(&list["total_mass_g"]) - f(&bare["total_mass_g"]) - f(&w["mass_g"])).abs() < 1e-6, "{list}");
     assert!(list["csv"].as_str().unwrap().contains("Weld size (mm),Length welded (mm),Mass (kg)\n5.00,1200.00,"), "{list}");
+    // The design's physical properties count it too: its mass at the middle of the edge (where the
+    // top face meets the rounded corner, y = −14), so the centre of mass moves towards (300, −14, 20).
+    let props = run(&mut s, "component.properties", json!({}));
+    let t = &props["total"];
+    let rail_mass = f(&bare["total_mass_g"]);
+    assert!((f(&t["weld_mass_g"]) - f(&w["mass_g"])).abs() < 1e-6 && (f(&t["mass_g"]) - rail_mass - f(&w["mass_g"])).abs() < 1e-6, "{props}");
+    let all = f(&t["mass_g"]);
+    let want = [300.0, -14.0 * f(&w["mass_g"]) / all, 20.0 * f(&w["mass_g"]) / all];
+    for k in 0..3 {
+        assert!((f(&t["center_of_mass"][k]) - want[k]).abs() < 1e-6, "{k}: {props}");
+    }
+    assert!((f(&t["volume_mm3"]) - volume(&mut s, "Rail") - 12.5 * 1200.0).abs() < 1e-6, "{props}");
     // Stitched 50 every 150 on one side: 600 mm holds stitches at 0, 150, 300, 450 and 550 doesn't fit: 4 × 50.
     let fid = made["feature"].clone();
     let p = json!({"edges": [{"body": "Rail", "point": [300, -14, 20]}], "size": 5, "stitch_length": 50, "stitch_pitch": 150});

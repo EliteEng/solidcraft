@@ -233,7 +233,8 @@ tube fitted to another body.
 - **Boundary**: a plane or a flat face (the ends are cut on its plane, extended past the face), or
   a body (the ends are coped by it, as a cope corner is: the member keeps the piece its other end
   is in).
-- **Gap**: how far short of a plane or face each end stops. A cope by a body has no gap yet.
+- **Gap**: how far short of a plane or face each end stops; by a body, how far each end is kept
+  from it all round (the body grown by the gap, its edges kept sharp).
 - **Extend to the boundary** (on by default): an end that stops short of the boundary is
   lengthened to meet it first. Its old corner cut goes: the end is made again from the line's
   section, then cut at the boundary.
@@ -266,7 +267,10 @@ and a **Stitch length** with its **Stitch pitch** for a stitch weld (stitches fr
 start, one every pitch while a whole one fits; empty: continuous). A weld changes no body: it is
 drawn along its edges as a bead, and the cut list lists the welds by size with the length welded
 and their mass (size² / 2 × the length welded, at the welded member's density), which the total
-mass includes. Each edge is found again from its point on the exact edge curves when the model
+mass includes. The design's physical properties (`component.properties`, the Properties window)
+count them as well: their volume and mass are in the totals, `weld_mass_g` (**Of which welds**)
+says how much, and each piece of edge adds its share at its exact centre, so the centre of mass
+and the inertia include them (a straight piece as a thin rod). Each edge is found again from its point on the exact edge curves when the model
 rebuilds; one that is gone fails the feature. `frame.weld` `{edges: [{body, point}], size,
 both_sides?, stitch_length?, stitch_pitch?}` does the same.
 

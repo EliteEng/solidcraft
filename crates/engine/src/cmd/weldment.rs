@@ -42,7 +42,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     .contract(&TRIM_CONTRACT)
     .output(output_schema_for::<FeatureResult>)
     .params(
-        "members: [{body: a frame member's body name, end?: start|end, near?: [x,y,z] (a point near the end; read when end is not given)}] (1…1000); and one boundary: plane: XY|XZ|YZ|plane name|{origin, normal} — or face: {body, point} (a flat face, its plane extended) — or tool: a body name (the ends are coped by it); gap?: length expr (how far short of a plane or face each end stops; default 0); extend?: bool (an end short of the boundary is lengthened to meet it first; default false). The members keep their names; the cut list shows their new ends. Returns the feature",
+        "members: [{body: a frame member's body name, end?: start|end, near?: [x,y,z] (a point near the end; read when end is not given)}] (1…1000); and one boundary: plane: XY|XZ|YZ|plane name|{origin, normal} — or face: {body, point} (a flat face, its plane extended) — or tool: a body name (the ends are coped by it); gap?: length expr (how far short of a plane or face each end stops, or how far from a tool body all round; default 0); extend?: bool (an end short of the boundary is lengthened to meet it first; default false). The members keep their names; the cut list shows their new ends. Returns the feature",
     ),
     CommandSpec::new("frame.gusset", "Gusset", crate::checked!("frame.gusset", gusset))
         .at("WELDMENTS", "CREATE")

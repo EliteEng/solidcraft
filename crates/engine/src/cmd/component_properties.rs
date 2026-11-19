@@ -233,11 +233,31 @@ fn measure(s: &Session, doc: &Document, selected: &[u64], descendants: bool, abo
     let mut done = 0;
     // Closed bodies' (mass, centre of mass, inertia about it), all in world axes.
     let mut parts: Vec<(f64, Vec3, Option<Tensor3>)> = Vec::new();
+    // The welds, with the component their feature is in.
+    let welds: Vec<(u64, solidcraft_doc::frame::Weld)> =
+        solidcraft_doc::frame::welds(doc, &state).into_iter().filter_map(|w| doc.feature(w.feature).map(|f| (f.component, w))).collect();
+    let mut weld_mass = None;
     for (component, path, transform) in selected_placements {
         if path.iter().skip(selected.len()).any(|id| reference.contains(id)) {
             continue;
         }
         placement_count += 1;
+        for (_, w) in welds.iter().filter(|(c, _)| *c == component) {
+            let Some(body) = w.bodies.first().and_then(|b| state.body(b)) else { continue };
+            // Placed as the first body it welds is.
+            let at: Mat = doc.model_body_offset(body).map(|offset| solidcraft_doc::mat_mul(&transform, offset)).unwrap_or(transform);
+            let (v, m, pieces) = weld_parts(w, doc.density(&body.name), &at);
+            if !(m > 0.0 && m.is_finite()) {
+                continue;
+            }
+            volume += v;
+            mass += m;
+            *weld_mass.get_or_insert(0.0) += m;
+            for (pm, centre, inertia) in pieces {
+                moment += centre * pm;
+                parts.push((pm, centre, Some(inertia)));
+            }
+        }
         for &(index, body) in by_component.get(&component).into_iter().flatten() {
             if let Some(w) = &watch {
                 if w.cancelled() {
@@ -341,6 +361,7 @@ fn measure(s: &Session, doc: &Document, selected: &[u64], descendants: bool, abo
             volume_mm3: volume,
             area_mm2: area,
             mass_g: mass,
+            weld_mass_g: weld_mass,
             center_of_mass: centroid,
             first_moment_g_mm: moment,
             inertia_g_mm2: at_centre,
@@ -353,6 +374,34 @@ fn measure(s: &Session, doc: &Document, selected: &[u64], descendants: bool, abo
             inertia_about,
         },
     })
+}
+
+/// Weld `w` at `density` (g/cm³) placed by `at`: its volume (mm³), mass (g), and each piece's
+/// mass, centre and inertia about that centre (a straight piece as a thin rod, an arc at its
+/// centroid), the mass shared by length.
+fn weld_parts(w: &solidcraft_doc::frame::Weld, density: f64, at: &Mat) -> (f64, f64, Vec<(f64, Vec3, Tensor3)>) {
+    let volume = w.volume();
+    let mass = volume * density / 1000.0;
+    let length: f64 = w.pieces.iter().map(|p| p.length).sum();
+    if !(length > 0.0 && mass.is_finite()) {
+        return (0.0, 0.0, Vec::new());
+    }
+    let turn = linear(at);
+    let pieces = w
+        .pieces
+        .iter()
+        .map(|p| {
+            let m = mass * p.length / length;
+            let centre = solidcraft_doc::apply_point(at, p.centre);
+            let rod = p.along.map(|d| {
+                let d = [0, 1, 2].map(|i| turn[i][0] * d.x + turn[i][1] * d.y + turn[i][2] * d.z);
+                let k = m * p.length * p.length / 12.0;
+                [0, 1, 2].map(|i| [0, 1, 2].map(|j| k * (if i == j { 1.0 } else { 0.0 } - d[i] * d[j])))
+            });
+            (m, centre, rod.unwrap_or([[0.0; 3]; 3]))
+        })
+        .collect();
+    (volume, mass, pieces)
 }
 
 /// The tessellating work a properties command did on this thread, for tests: placed copies
