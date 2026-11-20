@@ -1002,3 +1002,35 @@ fn groups_have_their_own_lines_and_profile_and_come_back_when_editing() {
     let c = apply_commands(&app, &e).unwrap();
     assert_eq!(c[0].1["params"]["groups"], json!([]), "{c:?}");
 }
+
+/// A corner's own treatment picked in the corner list with the mouse is kept: the row reads the
+/// change from the value the dropdown sets, as the dropdown's response is not marked changed.
+#[test]
+fn a_corner_treatment_picked_in_the_corner_list_is_kept() {
+    let mut h = crate::scenario::Harness::new();
+    // Tall enough that the corner list is on screen without scrolling.
+    h.call("ui.resize", json!({"width": 1600, "height": 2400}));
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY", "name": "Frame"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [600, 400]})),
+        ("sketch.finish", json!({})),
+        ("frame.member", json!({"sketch": "Frame", "profile": {"kind": "rect_tube", "width": 40, "height": 40, "wall": 3}})),
+    ] {
+        h.app.run(id, p).unwrap();
+    }
+    let f = h.app.session.doc.features.last().unwrap().id;
+    h.app.edit_feature(f);
+    h.frames(4);
+    if crate::scenario::handle_at("dialog:p1 · L").is_none() {
+        h.step(&json!({"click": {"handle": "dialog:section:ui.frame_corner_list"}})).unwrap();
+        h.frames(3);
+    }
+    h.step(&json!({"click": {"handle": "dialog:p1 · L"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"widget": "Butt"})).unwrap();
+    h.frames(3);
+    let Some(Kind::Frame(m)) = h.app.dialog.as_ref().map(|d| &d.kind) else { panic!("no Frame Member window") };
+    assert_eq!(m.overrides.get("p1").and_then(|o| o.treatment), Some(solidcraft_engine::doc::frame_corner::Treatment::Butt), "{:?}", m.overrides);
+    let c = apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(c[0].1["params"]["corner_overrides"]["p1"]["treatment"], "butt", "{c:?}");
+}

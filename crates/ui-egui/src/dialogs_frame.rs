@@ -204,7 +204,10 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut 
         if m.library.is_none() {
             let kinds = frame::profile_kinds();
             let labels: Vec<&str> = kinds.iter().map(|k| k.label).collect();
-            if choice_row(ui, "Profile", "frame_profile", &mut m.kind, &labels).changed() {
+            // The kit's dropdown sets the value; whether it changed is read from the value itself.
+            let kind = m.kind;
+            choice_row(ui, "Profile", "frame_profile", &mut m.kind, &labels);
+            if m.kind != kind {
                 m.point = None;
             }
             if let (Some(k), Some(values)) = (kinds.get(m.kind), m.dims.get_mut(m.kind)) {
@@ -887,7 +890,8 @@ fn group_rows(ui: &mut egui::Ui, m: &mut Member, inputs: &mut [SelInput]) {
     }
     let shown: Vec<&str> = labels.iter().map(String::as_str).collect();
     let mut chosen = m.group;
-    if choice_row(ui, "ui.frame_member_group", "frame_member_group", &mut chosen, &shown).changed() {
+    choice_row(ui, "ui.frame_member_group", "frame_member_group", &mut chosen, &shown);
+    if chosen != m.group {
         if chosen >= count {
             new_group(m, inputs);
         } else {
@@ -1197,7 +1201,9 @@ fn selected_rows(ui: &mut egui::Ui, m: &mut Member, list: &[frame::JunctionRepor
     let mut labels: Vec<&str> = options.iter().map(|o| tr(o.0)).collect();
     labels.push("—");
     let title = format!("{} ({})", tr("ui.frame_corner_selected"), picked.len());
-    if choice_row(ui, &title, "frame_corner_selected", &mut chosen, &labels).changed()
+    let before = chosen;
+    choice_row(ui, &title, "frame_corner_selected", &mut chosen, &labels);
+    if chosen != before
         && let Some(o) = options.get(chosen)
     {
         set_selected(m, Some(o.1), None);
@@ -1245,7 +1251,9 @@ fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
     let mut chosen = options.iter().position(|o| o.1 == current).unwrap_or(0);
     let labels: Vec<&str> = options.iter().map(|o| tr(o.0)).collect();
     let title = format!("{} · {}", j.id, kind_label(j.kind));
-    if choice_row(ui, &title, &format!("frame_corner_{}", j.id), &mut chosen, &labels).changed() {
+    let before = chosen;
+    choice_row(ui, &title, &format!("frame_corner_{}", j.id), &mut chosen, &labels);
+    if chosen != before {
         let treatment = options.get(chosen).and_then(|o| o.1);
         set_override(m, &j.id, |o| o.treatment = treatment);
     }
@@ -1260,7 +1268,8 @@ fn corner_row(ui: &mut egui::Ui, m: &mut Member, j: &frame::JunctionReport) {
     let overridden = m.overrides.contains_key(&j.id);
     {
         crate::ui_kit::row(ui, "", |ui| {
-            ui.horizontal(|ui| {
+            // Wrapped, so a long member name never widens the window's rows.
+            ui.horizontal_wrapped(|ui| {
                 let mut on = m.selected.contains(&j.id);
                 if crate::ui_kit::checkbox(ui, tr("ui.frame_corner_select"), &mut on).changed() {
                     toggle_selected(m, &j.id);
