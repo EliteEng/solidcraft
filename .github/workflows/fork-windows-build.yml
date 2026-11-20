@@ -1,0 +1,53 @@
+# Windows test builds on the EliteEng fork, on GitHub's own Windows runners. It lives only on
+# `fork-build/*` branches: it is never part of a pull request to tangency-labs/solidcraft.
+# Push a branch named fork-build/<anything> (or re-run from the Actions tab) and download the
+# portable zip from the run's artifacts. Unsigned; kept 14 days.
+name: Fork Windows build
+
+on:
+  push:
+    branches: ["fork-build/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+concurrency:
+  group: fork-windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows portable
+    if: github.repository_owner == 'EliteEng'
+    runs-on: windows-2025
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: fork-windows-x64
+      - name: Version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          "SOLIDCRAFT_VERSION=$v-test+$("${{ github.sha }}".Substring(0,9))" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build and package (portable zip)
+        shell: pwsh
+        run: ./packaging/windows/package.ps1 -Arch x64 -PortableOnly
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: solidcraft-${{ github.sha }}-windows-portable
+          path: dist/release/*-portable.zip
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
