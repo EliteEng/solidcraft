@@ -7,8 +7,8 @@
 use solidcraft_geom::prelude::*;
 
 use serde_json::Value;
-use solidcraft_doc::frame::{self, TrimEnd};
 use solidcraft_doc::frame::TrimEndSide as End;
+use solidcraft_doc::frame::{self, TrimEnd};
 use solidcraft_doc::{BodyName, FaceAt, FeatureKind, Position};
 use solidcraft_io::{DxfFile, DxfLinetype, DxfShape};
 

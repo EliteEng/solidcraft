@@ -266,7 +266,6 @@ pub(crate) fn span_along(body: &kernel::Body, d: Vec3) -> Result<(f64, f64)> {
     Ok((bb.min.x, bb.max.x))
 }
 
-
 /// The axis of the frame member that body `name` is: its start and its end as made, in its
 /// feature's component coordinates.
 pub fn member_line(doc: &Document, st: &ModelState, name: &str) -> Result<(Vec3, Vec3)> {

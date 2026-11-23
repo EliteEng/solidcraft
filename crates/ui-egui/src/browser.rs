@@ -2519,7 +2519,6 @@ fn cut_list_rows(app: &mut SolveApp, rows: &mut Rows<'_>, depth: usize) {
     }
 }
 
-
 /// The Analysis folder: a row per plane of the Section Analysis while it has any (shown or
 /// hidden), each with an eye to hide and show it, a double-click to edit it and a menu to delete
 /// it (#822).

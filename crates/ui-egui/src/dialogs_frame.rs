@@ -6,8 +6,8 @@
 use serde_json::{Map, Value, json};
 use solidcraft_engine::doc::expr::Kind as ValueKind;
 use solidcraft_engine::doc::frame::{self, CornerType, MemberProfile};
-use solidcraft_engine::doc::frame_library;
 use solidcraft_engine::doc::frame_corners::CORNER_TOL;
+use solidcraft_engine::doc::frame_library;
 use solidcraft_engine::doc::{FeatureKind, ProfileSel};
 use solidcraft_engine::geom::prelude::*;
 use solidcraft_engine::sketch::CurveKind;
@@ -546,7 +546,15 @@ impl Member {
     /// The shown group as it stands, its lines from the Lines input.
     fn shown(&self, inputs: &[SelInput]) -> Group {
         let lines = crate::selection::items(inputs, 0).to_vec();
-        Group { lines, anchor: self.anchor, locate: self.locate, point: self.point.clone(), angle: self.angle.clone(), mirror: self.mirror, name: self.name.clone() }
+        Group {
+            lines,
+            anchor: self.anchor,
+            locate: self.locate,
+            point: self.point.clone(),
+            angle: self.angle.clone(),
+            mirror: self.mirror,
+            name: self.name.clone(),
+        }
     }
 
     /// Every group as it stands, the shown one included (none is while `current` is past the end).
@@ -1359,7 +1367,9 @@ fn member_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut [
             enter |= text_row(ui, "ui.frame_category", &mut m.save_category, &category).0;
             form_row(ui, "ui.frame_save_personal", |ui| check(ui, &mut m.save_personal));
         }
-        if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.frame_save_to_library"), crate::ui_kit::Button::Normal).clicked() {
+        if crate::ui_kit::row(ui, "", |ui| crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.frame_save_to_library"), crate::ui_kit::Button::Normal))
+            .clicked()
+        {
             if m.save_open {
                 m.save_requested = true;
             }

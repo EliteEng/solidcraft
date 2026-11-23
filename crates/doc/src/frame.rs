@@ -350,7 +350,8 @@ impl crate::walk::Walk for ProfileSpec {
 
 pub use crate::eval::frame_member::{
     LaterPieces, corner_at_point, corner_point, default_order, default_orders, group_member_names, is_crossing, is_member_line, is_member_wire,
-    member_line_ids, member_names, member_of_body, member_parts, member_segments, member_turns, members_cross, members_of_bodies, overlap_parent, sketch_point, sketch_section,
+    member_line_ids, member_names, member_of_body, member_parts, member_segments, member_turns, members_cross, members_of_bodies, overlap_parent,
+    sketch_point, sketch_section,
 };
 pub use crate::frame_corners::{CornerOverride, CornerType, MAX_GAP, MemberRef, checked_gap, read_coped};
 

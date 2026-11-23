@@ -57,16 +57,13 @@ fn the_cut_list_groups_identical_members_with_their_lengths_and_end_angles() {
         json!({"feature": fid.clone(), "command": "frame.member", "params": {"sketch": "Frame", "profile": tube(), "corner": "butt", "gap": 3}}),
     );
     let list = run(&mut s, "frame.cut_list", json!({"feature": fid}));
-    let mut lengths: Vec<(f64, f64, f64)> = list["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|i| (f(&i["length"]), f(&i["short_length"]), f(&i["ends"][0]["angle"])))
-        .collect();
+    let mut lengths: Vec<(f64, f64, f64)> =
+        list["items"].as_array().unwrap().iter().map(|i| (f(&i["length"]), f(&i["short_length"]), f(&i["ends"][0]["angle"]))).collect();
     lengths.sort_by(|a, b| b.0.total_cmp(&a.0));
     let rails_through = [(640.0, 640.0, 0.0), (354.0, 354.0, 0.0)];
     let posts_through = [(554.0, 554.0, 0.0), (440.0, 440.0, 0.0)];
-    let near = |want: &[(f64, f64, f64); 2]| lengths.iter().zip(want).all(|(a, b)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6 && a.2.abs() < 1e-6);
+    let near =
+        |want: &[(f64, f64, f64); 2]| lengths.iter().zip(want).all(|(a, b)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6 && a.2.abs() < 1e-6);
     assert!(lengths.len() == 2 && (near(&rails_through) || near(&posts_through)), "{lengths:?}");
     assert!(list.get("csv").is_none());
     assert!(s.execute("frame.cut_list", &json!({"feature": "Frame"})).unwrap_err().to_string().contains("not a frame member"));
@@ -146,7 +143,14 @@ fn plates_are_listed_when_asked() {
     rectangle(&mut s);
     run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corner": "mitre"}));
     let st = s.model.state();
-    let at = |x: f64, y: f64| st.bodies.iter().find(|b| b.body.exact_bounds().is_ok_and(|bb| bb.min.x <= x && x <= bb.max.x && bb.min.y <= y && y <= bb.max.y)).unwrap().name.clone();
+    let at = |x: f64, y: f64| {
+        st.bodies
+            .iter()
+            .find(|b| b.body.exact_bounds().is_ok_and(|bb| bb.min.x <= x && x <= bb.max.x && bb.min.y <= y && y <= bb.max.y))
+            .unwrap()
+            .name
+            .clone()
+    };
     let (rail, post) = (at(300.0, 0.0), at(600.0, 200.0));
     drop(st);
     run(
