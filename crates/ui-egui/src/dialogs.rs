@@ -1527,7 +1527,8 @@ impl Dialog {
             Kind::Surface(_) => return true,
             Kind::SketchModify(k) => return k.previews(),
             Kind::Plastic(k) => return k.previews(),
-            Kind::Frame(_) | Kind::EndCap(_) | Kind::RotateMember(_) | Kind::Weld(_) => return true,
+            Kind::Weld(k) => return k.previews(),
+            Kind::Frame(_) | Kind::EndCap(_) | Kind::RotateMember(_) => return true,
             Kind::Part(_) | Kind::PartSize(_) | Kind::InsertDrawing(_) | Kind::InsertAirfoil(_) => return true,
             // Web previews run synchronously; a modelled thread can take seconds.
             Kind::Thread { .. } => return !cfg!(target_arch = "wasm32") && self.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false),
@@ -5877,6 +5878,14 @@ pub(crate) fn run_dialog(app: &mut SolveApp, d: &Dialog) -> Result<(), String> {
     }
     if let Kind::ViewNavigator(form) = &d.kind {
         return crate::view_gizmo::run_dialog(app, form, &d.inputs);
+    }
+    if let Kind::Weld(k) = &d.kind
+        && k.saves()
+    {
+        return crate::dialogs_weldment::run_export(app, k, &d.inputs);
+    }
+    if let Kind::Weld(crate::dialogs_weldment::Wd::SaveProfile(sp)) = &d.kind {
+        return crate::dialogs_weldment::run_save_profile(app, sp, &d.inputs);
     }
     // Saving asks for a file name first; `Err("")` is the user backing out of that.
     if let Kind::SaveMesh(k) = &d.kind {

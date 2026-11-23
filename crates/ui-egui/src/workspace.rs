@@ -779,7 +779,12 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "SHEET METAL", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
     // A frame starts from a sketch of its lines; its profile sizes are often parameters.
     Section { tab: "WELDMENTS", panel: "SKETCH", promoted: 1, ids: &["sketch.create"] },
-    Section { tab: "WELDMENTS", panel: "CREATE", promoted: 4, ids: &["frame.member", "frame.trim", "frame.end_cap", "frame.gusset", "frame.weld"] },
+    Section {
+        tab: "WELDMENTS",
+        panel: "CREATE",
+        promoted: 4,
+        ids: &["frame.member", "frame.trim", "frame.end_cap", "frame.gusset", "frame.weld", "frame.personal.save"],
+    },
     Section { tab: "WELDMENTS", panel: "MODIFY", promoted: 1, ids: &["frame.rotate_member"] },
     // What to cut: identical members together, with their lengths and end angles.
     Section { tab: "WELDMENTS", panel: "INSPECT", promoted: 3, ids: &["frame.cut_list", "frame.export_member_step", "frame.export_member_dxf"] },

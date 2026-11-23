@@ -128,7 +128,7 @@ kind's and entry's points move with the material.
 | Library | Stored in | Notes |
 |---|---|---|
 | Design library | the design, key `frame_profiles` | Self-contained: a design opens identically on any machine. |
-| Personal library | preferences, like the personal Hole presets ([hole-presets.md](../hole-presets.md)) | Shown alongside the design library in pickers. |
+| Personal library | library files in the user's profile folders, subfolders as categories (step 12); in the browser, preferences | Shown alongside the design library in pickers. |
 | Library file | `solidcraft-frame-profiles/1` JSON | Import and export, so a shop can share its stock list. |
 
 Choosing a personal entry in a member dialog copies it into the design library first, with a new
@@ -339,7 +339,8 @@ Trim/Extend, gussets and welds read these records instead of measuring geometry 
   change existing UI defaults (AGENTS.md). New features get the mitre and butt defaults.
 - A design saved with groups, opened by the last release: that release warns about the newer
   format and keeps what it cannot read, as with any pending change.
-- The personal library is a preference, not part of the design format.
+- The personal library is the user's profile folders (and in the browser a preference), not part
+  of the design format.
 
 ## 5. Trim/Extend
 
@@ -472,7 +473,18 @@ adds its one pending format file.
 7. **Cut list** and its export, stable numbers, Browser folder.
 8. **End caps.** 9. **Gussets.** 10. **Welds.**
 
-Steps 1 and 2 don't depend on 3. Steps 6–10 depend on the end records from step 3.
+12. **Profile folders and Save as Weldment Profile.** The personal library moves from the
+   preferences into a list of profile folders (`frame_profile_folders`, default
+   `<data folder>/frame-profiles`), each profile a library file of its own, its subfolders (up to
+   three levels) its categories, so a shop can share one set of profiles on a shared drive. The
+   earlier folder wins a name; a folder that can't be written is read-only. Folders are read on a
+   thread; profiles the preferences kept are moved into the first folder once. `frame.personal.save`
+   saves a sketch's section (with named points, default point and stock data) straight to a folder
+   without changing the design, from a sketch's menu or WELDMENTS › CREATE;
+   `frame.personal.folders` lists and sets the folders, also in Preferences › Tools › Frames. The
+   browser has no folders and keeps them in preferences, as before.
+
+Steps 1 and 2 don't depend on 3. Steps 6–10 depend on the end records from step 3; step 12 on 2.
 
 ## Later
 

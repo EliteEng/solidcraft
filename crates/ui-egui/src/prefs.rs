@@ -1893,6 +1893,10 @@ preference_settings! {
     /// The personal frame profile library, offered by Frame Member in every design in this profile
     /// (`frame.personal.*`, docs/frames.md). No page reset discards this user-authored library.
     frame_profiles: crate::frame_personal::Library = crate::frame_personal::Library::default();
+    /// The folders of the personal frame profile library, in order (`frame.personal.folders`):
+    /// library files in their subfolders, up to three levels, filed under those categories. Empty:
+    /// the default folder in SolidCraft's data folder. Moving between computers does not keep it.
+    frame_profile_folders: Vec<String> = Vec::new();
     /// Save as mesh: the last format (`stl` or `3mf`). Older versions also kept a "send to slicer"
     /// choice here (`save_mesh_send`, `save_mesh_slicer`); a settings file that still has them loads,
     /// and they are ignored.

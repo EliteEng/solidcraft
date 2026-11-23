@@ -355,11 +355,88 @@ impl LibraryExportParams {
     }
 }
 
-/// List the personal profile library (kept by the app, offered in every design).
+/// List the personal profile library: the profiles in your profile folders (kept by the app,
+/// offered in every design).
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 #[serde(deny_unknown_fields)]
-pub struct PersonalListParams {}
+pub struct PersonalListParams {
+    /// Read the folders again first (a profile someone else added to a shared folder). Default:
+    /// false, the profiles as last read.
+    #[serde(default)]
+    pub refresh: Option<bool>,
+}
+
+entry_params! {
+    /// Save a profile, typically a section drawn in a sketch (`profile_sketch`), to one of your
+    /// profile folders as a library file of its own. The design doesn't change; Frame Member
+    /// offers the profile in every design, filed under its folder's categories.
+    PersonalSaveParams {
+        /// Its name, unique in your personal library ignoring case: `C 150x50x2.4`.
+        pub name: String,
+        /// The profile folder to save in, by its path as `frame.personal.folders` lists it or its
+        /// number in that list from 1. Default: the first folder you can write to.
+        #[serde(default)]
+        pub folder: Option<String>,
+        /// A personal profile of the same name is replaced. Default: false, and such a name is
+        /// refused.
+        #[serde(default)]
+        pub replace: Option<bool>,
+    }
+}
+
+/// List your profile folders, or set them (`folders`). Each folder's subfolders, up to three
+/// levels, are the categories its profiles are filed under.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalFoldersParams {
+    /// The folders, in order: where two have a profile of the same name, the earlier one's is
+    /// offered. Empty: the default folder in SolidCraft's data folder. Default: unchanged.
+    #[serde(default)]
+    pub folders: Option<Vec<String>>,
+}
+
+impl PersonalFoldersParams {
+    pub fn paths_ok(&self) -> bool {
+        self.folders.as_ref().is_none_or(|f| f.len() <= MAX_PROFILE_FOLDERS && f.iter().all(|p| path_ok(&Some(p.clone()))))
+    }
+}
+
+/// The most profile folders a personal library reads.
+pub const MAX_PROFILE_FOLDERS: usize = 32;
+
+/// One profile folder.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct FolderOut {
+    /// The folder's path.
+    pub path: String,
+    /// You can save profiles in it.
+    pub writable: bool,
+    /// How many profiles were read from it.
+    pub profiles: usize,
+    /// Why it could not be read (it doesn't exist, it can't be reached).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// A file in a profile folder that was not read, and why.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct SkippedOut {
+    pub path: String,
+    pub reason: String,
+}
+
+/// What `frame.personal.folders` returns: the folders, in order.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PersonalFoldersResult {
+    pub folders: Vec<FolderOut>,
+    /// The call set the folders (`folders` given), rather than listing them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub set: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
 
 /// Add profiles to the personal library: a profile of the design's library (`id`), or the profiles
 /// of a library file (`path` or `library`). One of them.
@@ -380,6 +457,10 @@ pub struct PersonalAddParams {
     /// A personal profile of the same name is replaced. Default: false, and such a name is refused.
     #[serde(default)]
     pub replace: Option<bool>,
+    /// The profile folder to save in, by its path as `frame.personal.folders` lists it or its
+    /// number in that list from 1. Default: the first folder you can write to.
+    #[serde(default)]
+    pub folder: Option<String>,
 }
 
 impl PersonalAddParams {
@@ -451,14 +532,24 @@ pub struct LibraryExportResult {
     pub param_warnings: Vec<String>,
 }
 
-/// What `frame.personal.list` and `frame.personal.add` return: personal profiles (the whole
-/// library, or those added).
+/// What `frame.personal.list`, `.add` and `.save` return: personal profiles (the whole library, or
+/// those saved). From the app, each also has `folder` (its profile folder) and `file` (the library
+/// file it is in), or `folder: "preferences"` where no folder can be written (the browser).
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PersonalProfilesResult {
     pub profiles: Vec<EntryJson>,
-    /// With `frame.personal.add`: personal profiles of the same names are replaced.
+    /// With `frame.personal.add` and `.save`: personal profiles of the same names are replaced.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replace: bool,
+    /// With `frame.personal.add` and `.save`: the profile folder asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// With `frame.personal.list`: the profile folders, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<FolderOut>,
+    /// With `frame.personal.list`: files in the folders that were not read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<SkippedOut>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
 }

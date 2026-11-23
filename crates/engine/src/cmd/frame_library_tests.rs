@@ -414,3 +414,36 @@ fn bad_library_files_are_refused_with_the_reason() {
     refused(&mut s, "frame.library.export", json!({}), "the library is empty");
     assert!(s.doc.frame_profiles.is_empty(), "nothing was imported");
 }
+
+#[test]
+fn a_sketch_section_is_saved_as_a_personal_profile_without_changing_the_design() {
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name": "bar", "expression": "6 m"}));
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Purlin"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 17}));
+    let pt = run(&mut s, "sketch.point", json!({"point": [0, 17]}));
+    let pid = pt["created"]["points"][0].as_str().unwrap().to_string();
+    run(&mut s, "sketch.finish", json!({}));
+    let features = s.doc.features.len();
+    let saved = run(
+        &mut s,
+        "frame.personal.save",
+        json!({"name": "Tube 40", "category": ["Steel", "Round"], "profile_sketch": "Purlin", "points": [{"name": "inside_top", "sketch_point": pid}],
+               "default_point": "inside_top", "stock_length": "bar", "folder": "2", "replace": true}),
+    );
+    let e = &saved["profiles"][0];
+    assert_eq!((e["name"].as_str(), e["section"]["source"].as_str()), (Some("Tube 40"), Some("drawn")), "{saved}");
+    assert_eq!(e["category"], json!(["Steel", "Round"]), "{saved}");
+    assert_eq!(e["points"], json!([{"name": "inside_top", "at": [0.0, 17.0]}]), "{saved}");
+    // The design's parameter is kept as its value, so the profile means the same in any design.
+    assert_eq!(e["stock_length"], "6000 mm", "{saved}");
+    assert_eq!((saved["folder"].as_str(), saved["replace"].as_bool()), (Some("2"), Some(true)), "{saved}");
+    assert!(s.doc.frame_profiles.is_empty() && s.doc.features.len() == features, "saving a personal profile changes no design");
+    refused(&mut s, "frame.personal.save", json!({"name": "X"}), "one of them");
+    refused(&mut s, "frame.personal.save", json!({"name": " ", "profile_sketch": "Purlin"}), "1…96 bytes");
+    refused(&mut s, "frame.personal.save", json!({"name": "X", "profile_sketch": "Purlin", "folder": " "}), "`folder`");
+    let folders = run(&mut s, "frame.personal.folders", json!({"folders": ["/a", "/b"]}));
+    assert_eq!((folders["set"].as_bool(), folders["folders"][1]["path"].as_str()), (Some(true), Some("/b")), "{folders}");
+    assert!(run(&mut s, "frame.personal.folders", json!({})).get("set").is_none());
+}

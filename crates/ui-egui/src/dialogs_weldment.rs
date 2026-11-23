@@ -1,6 +1,7 @@
 //! Weldment dialogs for features that work on frame members after they are made
 //! (docs/design/weldments.md): Trim/Extend, Gusset and Weld, and the weld beads drawn in
-//! the view.
+//! the view; and Save as Weldment Profile, which saves a section drawn in a sketch to a profile
+//! folder (`frame.personal.save`).
 
 use serde_json::{Map, Value, json};
 use solidcraft_engine::Sel;
@@ -10,7 +11,7 @@ use solidcraft_engine::doc::frame::TrimEndSide as End;
 
 use crate::SolveApp;
 use crate::dialogs::{Kind, check, face_sel, form_row, planar_face, plane_sel, shown_expr};
-use crate::selection::{BODIES, EDGES, FACES, PLANAR_FACES, PLANES, SelInput, point_value as pt};
+use crate::selection::{BODIES, EDGES, FACES, PLANAR_FACES, PLANES, POINTS, PROFILES, SelInput, point_value as pt};
 use crate::ui_kit::hint_row;
 
 /// A weldment dialog's values (the picks are its selection inputs).
@@ -26,6 +27,29 @@ pub enum Wd {
     ExportStep,
     /// Export Member DXF: the top and front faces of one member.
     ExportDxf { hidden: bool },
+    /// Save as Weldment Profile: a sketch's section, and points on it to name.
+    SaveProfile(SaveProfile),
+}
+
+/// Save as Weldment Profile's values.
+#[derive(Clone, Debug, Default)]
+pub struct SaveProfile {
+    /// The sketch whose material is the section when no profiles are picked (the sketch the
+    /// window was opened on).
+    pub whole: Option<u64>,
+    pub name: String,
+    /// The profile folder, its place in the folder list.
+    pub folder: usize,
+    /// The categories, levels split by `/`: the subfolders the file goes in.
+    pub category: String,
+    /// A name for each placement point picked, in order.
+    pub point_names: Vec<String>,
+    /// The point members sit on: 0 the origin, else the named point before it.
+    pub default_point: usize,
+    pub material: String,
+    pub description: String,
+    pub stock_length: String,
+    pub replace: bool,
 }
 
 impl Wd {
@@ -36,6 +60,7 @@ impl Wd {
             Wd::Weld { .. } => "WELD",
             Wd::ExportStep => "EXPORT MEMBER STEP",
             Wd::ExportDxf { .. } => "EXPORT MEMBER DXF",
+            Wd::SaveProfile(_) => "SAVE AS WELDMENT PROFILE",
         }
     }
 
@@ -51,7 +76,13 @@ impl Wd {
             Wd::Weld { .. } => "frame.weld",
             Wd::ExportStep => "frame.export_member_step",
             Wd::ExportDxf { .. } => "frame.export_member_dxf",
+            Wd::SaveProfile(_) => "frame.personal.save",
         }
+    }
+
+    /// Changes no body, so there is nothing to preview.
+    pub fn previews(&self) -> bool {
+        !matches!(self, Wd::SaveProfile(_))
     }
 }
 
@@ -135,6 +166,22 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             Kind::Weld(Wd::ExportDxf { hidden: false }),
             vec![SelInput::new("Top face", PLANAR_FACES, false), SelInput::new("Front face", PLANAR_FACES, false)],
         )),
+        "frame.personal.save" => {
+            // Opened on a sketch (its menu, or while it is edited): the sketch's material, unless
+            // profiles are picked.
+            let is_sketch = |id: u64| app.session.doc.feature(id).is_some_and(|f| matches!(f.kind, FeatureKind::Sketch { .. }));
+            let whole = app
+                .session
+                .selection
+                .iter()
+                .find_map(|sel| match sel {
+                    Sel::Feature { id } if is_sketch(*id) => Some(*id),
+                    _ => None,
+                })
+                .or(app.session.active_sketch);
+            let inputs = vec![SelInput::new("Section (optional)", PROFILES, true), SelInput::new("Placement points", POINTS, true)];
+            Some((Kind::Weld(Wd::SaveProfile(SaveProfile { whole, ..SaveProfile::default() })), inputs))
+        }
         "frame.weld" => {
             let size = crate::dialogs::length_default(&app.session, "5");
             Some((Kind::Weld(Wd::Weld { size, both_sides: false, stitch_length: String::new(), stitch_pitch: String::new() }), weld_inputs()))
@@ -143,9 +190,10 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     }
 }
 
-pub fn rows(_app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Wd, _inputs: &[SelInput]) -> bool {
+pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Wd, inputs: &[SelInput]) -> bool {
     let mut enter = false;
     match k {
+        Wd::SaveProfile(sp) => enter |= save_profile_rows(app, ui, sp, inputs),
         Wd::Trim { gap, extend } => {
             crate::ui_kit::status_line(ui, tr("ui.frame_trim.hint"), crate::ui_kit::StatusTone::Dim);
             enter |= hint_row(ui, "ui.frame_trim_gap", gap, "0 mm");
@@ -210,6 +258,7 @@ pub fn commands(app: &SolveApp, k: &Wd, inputs: &[SelInput], extra: &Map<String,
             Ok(vec![("frame.gusset".into(), p)])
         }
         Wd::ExportStep | Wd::ExportDxf { .. } => Ok(vec![(k.command().into(), export_params(k, inputs)?)]),
+        Wd::SaveProfile(sp) => Ok(vec![("frame.personal.save".into(), save_profile_params(app, sp, inputs)?)]),
         Wd::Weld { size, both_sides, stitch_length, stitch_pitch } => {
             let edges: Vec<Value> = inputs
                 .first()
@@ -339,6 +388,147 @@ pub fn run_export(app: &mut SolveApp, k: &Wd, inputs: &[SelInput]) -> Result<(),
     let body = params["body"].as_str().unwrap_or("member").to_string();
     let ext = if matches!(k, Wd::ExportStep) { "step" } else { "dxf" };
     app.pick_save_command(&format!("{body}.{ext}"), &[ext], k.command(), params);
+    Ok(())
+}
+
+/// The section's sketch and the profiles picked in it (none: its material).
+fn profile_section(sp: &SaveProfile, inputs: &[SelInput]) -> Result<(Option<u64>, Vec<usize>), String> {
+    let picked: Vec<(u64, usize)> = inputs
+        .first()
+        .map(|i| {
+            i.items
+                .iter()
+                .filter_map(|sel| match sel {
+                    Sel::Profile { sketch, index } => Some((*sketch, *index)),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let sketch = picked.first().map(|x| x.0).or(sp.whole);
+    if picked.iter().any(|x| Some(x.0) != sketch) {
+        return Err("the section's profiles must be in one sketch".into());
+    }
+    Ok((sketch, picked.into_iter().map(|x| x.1).collect()))
+}
+
+/// The placement points picked: each point's sketch and its id there.
+fn placement_points(inputs: &[SelInput]) -> Vec<(Option<u64>, String)> {
+    inputs
+        .get(1)
+        .map(|i| {
+            i.items
+                .iter()
+                .filter_map(|sel| match sel {
+                    Sel::SketchPoint { id } => Some(match id.split_once(':') {
+                        Some((sketch, point)) => (sketch.parse().ok(), point.to_string()),
+                        None => (None, id.clone()),
+                    }),
+                    Sel::ExternalSketchPoint { sketch, id } => Some((Some(*sketch), id.clone())),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The name a placement point gets unless one is typed: its id in the sketch.
+fn point_name(sp: &SaveProfile, points: &[(Option<u64>, String)], i: usize) -> String {
+    let typed = sp.point_names.get(i).map(|n| n.trim()).unwrap_or_default();
+    if typed.is_empty() { points.get(i).map(|p| format!("point_{}", p.1)).unwrap_or_default() } else { typed.to_string() }
+}
+
+/// The name a profile gets unless one is typed: its sketch's.
+fn profile_name(app: &SolveApp, sketch: Option<u64>) -> String {
+    sketch.and_then(|id| app.session.doc.feature(id)).map(|f| f.name.clone()).unwrap_or_default()
+}
+
+fn save_profile_rows(app: &mut SolveApp, ui: &mut egui::Ui, sp: &mut SaveProfile, inputs: &[SelInput]) -> bool {
+    crate::ui_kit::status_line(ui, tr("ui.frame_save_profile.hint"), crate::ui_kit::StatusTone::Dim);
+    let mut enter = false;
+    let sketch = profile_section(sp, inputs).ok().and_then(|x| x.0);
+    enter |= crate::ui_kit::text_row(ui, "ui.frame_save_name", &mut sp.name, &profile_name(app, sketch)).0;
+    let folders: Vec<String> = app
+        .frame_personal
+        .folders()
+        .iter()
+        .map(|f| if f.writable { f.path.clone() } else { solidcraft_ui_text::format("ui.frame_folder_read_only_label", &[("folder", &f.path)]) })
+        .collect();
+    if folders.len() > 1 {
+        let labels: Vec<&str> = folders.iter().map(String::as_str).collect();
+        crate::ui_kit::choice_row(ui, "ui.frame_profile_folder", "frame_profile_folder", &mut sp.folder, &labels);
+    }
+    enter |= crate::ui_kit::text_row(ui, "ui.frame_category", &mut sp.category, tr("ui.frame_category_hint")).0;
+    let points = placement_points(inputs);
+    sp.point_names.resize(points.len(), String::new());
+    for (i, (_, id)) in points.iter().enumerate() {
+        let label = solidcraft_ui_text::format("ui.frame_point_name", &[("point", id)]);
+        let hint = format!("point_{id}");
+        if let Some(name) = sp.point_names.get_mut(i) {
+            enter |= crate::ui_kit::text_row(ui, &label, name, &hint).0;
+        }
+    }
+    let mut labels = vec![solidcraft_ui_text::tr("ui.frame_point_origin").to_string()];
+    labels.extend((0..points.len()).map(|i| point_name(sp, &points, i)));
+    sp.default_point = sp.default_point.min(labels.len() - 1);
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    crate::ui_kit::choice_row(ui, "ui.frame_default_point", "frame_save_default_point", &mut sp.default_point, &labels);
+    enter |= crate::ui_kit::text_row(ui, "ui.frame_material", &mut sp.material, "").0;
+    enter |= crate::ui_kit::text_row(ui, "ui.frame_description", &mut sp.description, "").0;
+    enter |= hint_row(ui, "ui.frame_stock_length", &mut sp.stock_length, "6 m");
+    form_row(ui, "ui.frame_save_replace", |ui| check(ui, &mut sp.replace));
+    if app.frame_personal.loading() {
+        crate::ui_kit::status_line(ui, tr("ui.frame_folders_reading"), crate::ui_kit::StatusTone::Dim);
+    }
+    enter
+}
+
+/// `frame.personal.save`'s parameters from the window.
+fn save_profile_params(app: &SolveApp, sp: &SaveProfile, inputs: &[SelInput]) -> Result<Value, String> {
+    let (sketch, profiles) = profile_section(sp, inputs)?;
+    let sketch = sketch.ok_or("pick the section's profiles in a sketch")?;
+    let name = Some(sp.name.trim()).filter(|n| !n.is_empty()).map_or_else(|| profile_name(app, Some(sketch)), str::to_string);
+    let mut p = json!({"name": name, "profile_sketch": sketch.to_string()});
+    if !profiles.is_empty() {
+        p["profiles"] = json!(profiles);
+    }
+    let levels: Vec<&str> = sp.category.split('/').map(str::trim).filter(|l| !l.is_empty()).collect();
+    if !levels.is_empty() {
+        p["category"] = json!(levels);
+    }
+    let points = placement_points(inputs);
+    if points.iter().any(|(s, _)| s.is_some_and(|s| s != sketch)) {
+        return Err("pick placement points in the section's sketch".into());
+    }
+    if !points.is_empty() {
+        let named: Vec<Value> = (0..points.len()).map(|i| json!({"name": point_name(sp, &points, i), "sketch_point": points[i].1})).collect();
+        p["points"] = json!(named);
+    }
+    if sp.default_point > 0 {
+        p["default_point"] = json!(point_name(sp, &points, sp.default_point - 1));
+    }
+    for (key, v) in [("material", &sp.material), ("description", &sp.description), ("stock_length", &sp.stock_length)] {
+        if !v.trim().is_empty() {
+            p[key] = json!(v.trim());
+        }
+    }
+    if let Some(f) = app.frame_personal.folders().get(sp.folder) {
+        p["folder"] = json!(f.path);
+    }
+    if sp.replace {
+        p["replace"] = json!(true);
+    }
+    Ok(p)
+}
+
+/// OK of Save as Weldment Profile: save it, and say where it went.
+pub fn run_save_profile(app: &mut SolveApp, sp: &SaveProfile, inputs: &[SelInput]) -> Result<(), String> {
+    let p = save_profile_params(app, sp, inputs)?;
+    let out = app.run("frame.personal.save", p)?;
+    let e = &out["profiles"][0];
+    let name = e["name"].as_str().unwrap_or_default();
+    let place = e["file"].as_str().or_else(|| e["folder"].as_str()).unwrap_or_default();
+    app.set_status(solidcraft_ui_text::format("ui.frame_profile_saved", &[("name", name), ("place", place)]), false);
     Ok(())
 }
 

@@ -115,18 +115,56 @@ parameters is written with their values (`"wall": "3 mm"`), so it means the same
   the design's library. A profile the library has already, the same apart from its id, is reused;
   a name it has for a different profile takes ` (2)`. Undo takes the import back.
 
-The personal library is kept with your preferences and offered in every design. It is yours, not
-the design's: choosing a personal profile in Frame Member copies it into the design's library when
-the member is made (or reuses the same profile there), so the design never depends on it.
+The personal library is yours, not the design's, and is offered in every design: choosing a
+personal profile in Frame Member copies it into the design's library when the member is made (or
+reuses the same profile there), so the design never depends on it.
 
-- `frame.personal.list`: the personal profiles.
-- `frame.personal.add` `{id | path | library, replace?}`: adds a profile of the design's library
-  (its parameters kept as values), or every profile of a library file. A name the personal library
-  has is refused unless `replace` is true.
-- `frame.personal.remove` `{name}`: designs that use the profile keep their copy.
+Its profiles are library files in your **profile folders**, by default a `frame-profiles` folder
+in SolidCraft's data folder (`%LOCALAPPDATA%\SolidCraft`, `~/Library/Application Support/SolidCraft`
+or `~/.local/share/solidcraft`). A folder's subfolders, up to three levels, are the categories its
+profiles are filed under, whatever the file says: `Aluminium/Extrusions/40 series/4040.json` is
+filed under Aluminium › Extrusions › 40 series. Each profile you save is a file of its own, named
+after it; a file holding several profiles works too, and so does a folder somebody else keeps up to
+date, such as a shop's stock list on a shared drive. Preferences › Tools › Frames lists the folders
+in order, with how many profiles each has, and adds, moves, removes and opens them; where two folders
+have a profile of the same name, the upper one's is used and the other is reported as skipped. A
+folder you can't write to is read-only: its profiles are offered, but saves go to the first folder
+that can be written. A file that can't be read, and folders more than three levels down, are
+reported and skipped. Profiles older versions kept with the preferences are moved into the first
+folder that can be written the first time it is read. In the browser, which has no folders to keep,
+the profiles are kept with its settings.
+
+**Save as Weldment Profile** (a sketch's right-click menu, or WELDMENTS › CREATE) saves a section
+you draw (an extrusion, a purlin, anything the built-in profiles don't have) straight to a profile
+folder, without adding anything to the design: the sketch's material, or the profiles you pick in
+it; **Placement points** picked on the sketch, each given a name; **Members sit on** (the default
+point); **Category** (`Steel/Purlins`, the subfolders); **Folder** when there is more than one;
+material, description and stock length. The profile is the section as drawn; draw it again at
+other sizes for a family of sizes.
+
+- `frame.personal.list` `{refresh?}`: the personal profiles, each with its `folder` and `file`
+  (`folder: "preferences"` in the browser), the `folders` (`path`, `writable`, `profiles`,
+  `error`) and the files `skipped` with the reason.
+- `frame.personal.save` `{name, folder?, replace?, category?, profile | profile_sketch (+
+  profiles?), points?, default_point?, material?, description?, stock_length?}`: as
+  `frame.library.add` takes them, saved to a profile folder (by path, or its number from 1;
+  default the first that can be written) in the subfolders `category` names. The design's
+  parameters are kept as their values. A name the personal library has is refused unless
+  `replace` is true.
+- `frame.personal.add` `{id | path | library, replace?, folder?}`: adds a profile of the design's
+  library (its parameters kept as values), or every profile of a library file, each saved as
+  `frame.personal.save` saves.
+- `frame.personal.remove` `{name}`: deletes its file (or takes it out of a file of several);
+  refused in a folder you can't write to. Designs that use the profile keep their copy.
 - `frame.personal.export` `{names?, path?}`: the personal profiles as a library file.
+- `frame.personal.folders` `{folders?}`: lists the profile folders, or sets them in order (an
+  empty list: the default folder). An agent can only add folders it may use.
 - `frame.member` also takes a whole profile as `library` (as `frame.personal.list` lists it), and
   adds it to the design's library.
+
+```json
+{"command": "frame.personal.save", "params": {"name": "C 150x50x2.4", "category": ["Steel", "Purlins"], "profile_sketch": "C purlin", "points": [{"name": "web_centre", "sketch_point": "p7"}], "default_point": "web_centre", "stock_length": "6 m"}}
+```
 
 In Frame Member, personal profiles appear in Type and Size beside the design's, marked
 **(personal)**; a design profile of the same name hides the personal one. **Also save to personal

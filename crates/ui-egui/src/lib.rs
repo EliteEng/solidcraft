@@ -550,6 +550,9 @@ pub struct Services {
     /// folder picker: a plugin field shows no Browse button and the text field still accepts
     /// a pasted path, and the document library cannot choose a folder.
     pub pick_folder: Option<Box<dyn Fn() -> FilePickerFuture>>,
+    /// The default folder for frame profiles you save (`frame_personal`), used while Preferences
+    /// names none; None (the browser, tests): the profiles are kept with the preferences.
+    pub frame_profiles_dir: Option<String>,
     pub show_in_folder: Option<Box<dyn Fn(&str)>>,
     /// Open a file in the program the system opens its kind with (a PDF in its viewer, to print).
     pub open_path: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
@@ -1004,6 +1007,8 @@ pub struct SolveApp {
     /// The start page.
     pub home: home::HomeState,
     pub library: library::LibraryState,
+    /// The profile folders of the personal frame profile library, as last read.
+    pub frame_personal: frame_personal::State,
     /// The 3D mouse: which device, its reading, and the calibration window.
     pub space_mouse: space_mouse::Input,
     /// The one-time question to make a smooth-scrolling mouse wheel zoom (`wheel_hint`).
@@ -1262,6 +1267,7 @@ impl SolveApp {
             embed_editor: false,
             home: home::HomeState::default(),
             library: library::LibraryState::default(),
+            frame_personal: frame_personal::State::default(),
             space_mouse: Default::default(),
             wheel_hint: Default::default(),
             file_load: file_load::FileLoad::default(),
@@ -4280,6 +4286,7 @@ impl SolveApp {
         self.step_view_animation(ctx);
         self.poll_control_jobs(ctx);
         self.drain_control(ctx);
+        frame_personal::poll(self, ctx);
         self.follow_view_request(true);
         self.return_from_extrude_view();
         self.return_from_feature_edit();

@@ -142,3 +142,52 @@ fn member_exports_take_their_picks() {
     let Kind::Weld(k) = &d.kind else { panic!() };
     assert_eq!(export_params(k, &d.inputs).unwrap(), json!({"body": "Post"}));
 }
+
+/// Save as Weldment Profile, opened from a sketch's menu, saves the sketch's section with a named
+/// point to the profile folder chosen, under the category typed, and leaves the design alone.
+#[test]
+fn a_sketch_is_saved_as_a_weldment_profile_in_its_category_folder() {
+    let mut s = Session::default();
+    s.execute("sketch.create", &json!({"plane": "XY", "name": "Purlin"})).unwrap();
+    s.execute("sketch.circle.center", &json!({"center": [0, 0], "radius": 20})).unwrap();
+    s.execute("sketch.circle.center", &json!({"center": [0, 0], "radius": 17})).unwrap();
+    let pt = s.execute("sketch.point", &json!({"point": [0, 17]})).unwrap();
+    let pid = pt["created"]["points"][0].as_str().unwrap().to_string();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let sketch = s.doc.features.iter().find(|f| f.name == "Purlin").unwrap().id;
+    let mut app = SolveApp::new(s, Services::default());
+    let dir = std::env::temp_dir().join(format!("solidcraft-save-profile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    app.run("frame.personal.folders", json!({"folders": [dir.to_string_lossy()]})).unwrap();
+    let features = app.session.doc.features.len();
+    // The sketch's menu selects it and opens the window on its material.
+    app.run("select.set", json!({"items": [{"type": "feature", "id": sketch}]})).unwrap();
+    app.start("frame.personal.save");
+    let mut d = app.dialog.clone().unwrap();
+    assert!(!d.previews(), "saving a profile changes no body: nothing to preview");
+    d.inputs[1].items = vec![Sel::SketchPoint { id: format!("{sketch}:{pid}") }];
+    if let Kind::Weld(Wd::SaveProfile(sp)) = &mut d.kind {
+        assert_eq!(sp.whole, Some(sketch));
+        sp.name = "Tube 40".into();
+        sp.category = "Steel / Round".into();
+        sp.point_names = vec!["inside_top".into()];
+        sp.default_point = 1;
+        sp.stock_length = "6 m".into();
+    }
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].0, "frame.personal.save");
+    assert_eq!(c[0].1["category"], json!(["Steel", "Round"]), "{c:?}");
+    assert_eq!(c[0].1["points"], json!([{"name": "inside_top", "sketch_point": pid}]), "{c:?}");
+    assert_eq!(c[0].1["default_point"], "inside_top", "{c:?}");
+    crate::dialogs::run_dialog(&mut app, &d).unwrap();
+    let file = dir.join("Steel").join("Round").join("Tube 40.json");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("\"drawn\"") && text.contains("inside_top"), "{text}");
+    assert_eq!(app.session.doc.features.len(), features, "the design doesn't change");
+    assert!(app.session.doc.frame_profiles.is_empty());
+    // Frame Member offers it in this design and any other, filed under its folders.
+    let e = crate::frame_personal::get(&app, "personal:tube 40").unwrap();
+    assert_eq!(e.category, ["Steel", "Round"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

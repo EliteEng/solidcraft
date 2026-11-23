@@ -910,6 +910,7 @@ fn services(cc: &eframe::CreationContext<'_>, folder: &DialogFolder) -> Services
         )
         .map(|program| (program, graphics_restart_args(std::env::args().skip(1)))),
         graphics_path: graphics_path().map(|p| p.to_string_lossy().to_string()),
+        frame_profiles_dir: solidcraft_engine::recovery::data_dir().map(|d| d.join("frame-profiles").to_string_lossy().into_owned()),
         window_system: window_system_now(),
         // Linux: the desktop's dark or light setting, which the window is not told on every
         // desktop (#7944). Windows and macOS: the window's own theme.

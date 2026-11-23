@@ -80,6 +80,7 @@ pub const DOCUMENTED: &[&str] = &[
     "frame.export_member_step",
     "frame.gusset",
     "frame.member",
+    "frame.personal.save",
     "frame.rotate_member",
     "frame.trim",
     "frame.weld",

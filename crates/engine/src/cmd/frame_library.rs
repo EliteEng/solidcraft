@@ -4,10 +4,12 @@
 //! profile's placement points. A member made from a library profile (`frame.member` with
 //! `library`) follows every edit to it.
 //!
-//! The personal library (`frame.personal.*`) is the app's, kept with its preferences and offered in
-//! every design. The engine holds no preferences, so those commands only check their parameters and
-//! read what they are given (a design's entry, a library file); the desktop and web apps act on the
-//! reply (`frame_personal` in the UI crate). Run without an app, they change nothing.
+//! The personal library (`frame.personal.*`) is the app's: library files in your profile folders,
+//! whose subfolders are the categories (in the browser, kept with the preferences), offered in
+//! every design. The engine holds no preferences and no folders, so those commands only check their
+//! parameters and build what they are given (a design's entry, a library file, a sketch's section);
+//! the desktop and web apps act on the reply (`frame_personal` in the UI crate). Run without an app,
+//! they change nothing.
 
 use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
@@ -21,9 +23,9 @@ use crate::schema::frame::ProfileOut;
 use crate::schema::frame_library::{
     EntryJson, ImportedOut, LibraryAddParams, LibraryEditParams, LibraryEntryOut, LibraryEntryResult, LibraryExportParams, LibraryExportResult,
     LibraryFeatureError, LibraryFileJson, LibraryImportParams, LibraryImportResult, LibraryListParams, LibraryListResult, LibraryRemoveParams,
-    LibraryRemoveResult, LibraryReplaceParams, LibraryReplaceResult, PersonalAddParams, PersonalExportParams, PersonalListParams,
-    PersonalProfilesResult, PersonalRemoveParams, PersonalRemoveResult, PointOut, PointParam, ProfilePointsParams, ProfilePointsResult, SectionOut,
-    typed,
+    LibraryRemoveResult, LibraryReplaceParams, LibraryReplaceResult, PersonalAddParams, PersonalExportParams, PersonalFoldersParams,
+    PersonalFoldersResult, PersonalListParams, PersonalProfilesResult, PersonalRemoveParams, PersonalRemoveResult, PersonalSaveParams, PointOut,
+    PointParam, ProfilePointsParams, ProfilePointsResult, SectionOut, typed,
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
@@ -44,6 +46,8 @@ const PERSONAL_LIST_CONTRACT: TypedContract<PersonalListParams> = TypedContract:
 const PERSONAL_ADD_CONTRACT: TypedContract<PersonalAddParams> = TypedContract::new();
 const PERSONAL_REMOVE_CONTRACT: TypedContract<PersonalRemoveParams> = TypedContract::new();
 const PERSONAL_EXPORT_CONTRACT: TypedContract<PersonalExportParams> = TypedContract::new();
+const PERSONAL_SAVE_CONTRACT: TypedContract<PersonalSaveParams> = TypedContract::new();
+const PERSONAL_FOLDERS_CONTRACT: TypedContract<PersonalFoldersParams> = TypedContract::new();
 
 /// The keys add and edit share, as their parameter docs list them.
 macro_rules! entry_doc {
@@ -113,21 +117,21 @@ pub static COMMANDS: &[CommandSpec] = &[
         .doc_only()
         .contract(&PERSONAL_LIST_CONTRACT)
         .output(output_schema_for::<PersonalProfilesResult>)
-        .params("Returns profiles: [entries as saved]: the personal library, kept by the app and offered in every design (empty without an app). frame.member takes an entry as `library`, adding it to the design's library"),
+        .params("refresh?: bool (read the folders again first). Returns profiles: [entries as saved, each with folder and file]: the personal library, the library files in your profile folders (their subfolders are the categories), offered in every design (empty without an app); folders: [{path, writable, profiles, error?}]; skipped: [{path, reason}] (files not read). frame.member takes an entry as `library`, adding it to the design's library"),
     CommandSpec::new("frame.personal.add", "Add to Personal Library", crate::checked!("frame.personal.add", personal_add))
         .icon("library")
         .noundo()
         .doc_only()
         .contract(&PERSONAL_ADD_CONTRACT)
         .output(output_schema_for::<PersonalProfilesResult>)
-        .params("id: a profile of the design's library | path: a library file | library: the library itself, one of them; replace?: bool (default false: a personal profile of the same name is refused). Returns profiles: [the entries added]; expressions that read the design's parameters are kept as their values"),
+        .params("id: a profile of the design's library | path: a library file | library: the library itself, one of them; replace?: bool (default false: a personal profile of the same name is refused); folder?: a profile folder (path or number from 1; default the first you can write to). Each profile is written as a file of its own in the subfolders its category names. Returns profiles: [the entries added]; expressions that read the design's parameters are kept as their values"),
     CommandSpec::new("frame.personal.remove", "Remove from Personal Library", crate::checked!("frame.personal.remove", personal_remove))
         .icon("library")
         .noundo()
         .doc_only()
         .contract(&PERSONAL_REMOVE_CONTRACT)
         .output(output_schema_for::<PersonalRemoveResult>)
-        .params("name → removed; designs that use the profile keep their own copy"),
+        .params("name → removed: its file is deleted (refused in a folder you can't write to); designs that use the profile keep their own copy"),
     CommandSpec::new("frame.personal.export", "Export Personal Library", crate::checked!("frame.personal.export", personal_export))
         .icon("export")
         .noundo()
@@ -135,6 +139,24 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&PERSONAL_EXPORT_CONTRACT)
         .output(output_schema_for::<LibraryExportResult>)
         .params("names?: [personal profiles; default all], path?: file → library (a `solidcraft-frame-profiles/1` file), written to `path` when given; never opens a dialog"),
+    CommandSpec::new("frame.personal.save", "Save as Weldment Profile", crate::checked!("frame.personal.save", personal_save))
+        .icon("library")
+        .noundo()
+        .doc_only()
+        .contract(&PERSONAL_SAVE_CONTRACT)
+        .output(output_schema_for::<PersonalProfilesResult>)
+        .params(concat!(
+            "name (unique in your personal library ignoring case); folder?: a profile folder (path or number from 1; default the first you can write to); replace?: bool; ",
+            entry_doc!(),
+            ". One of profile and profile_sketch; category names the subfolders the file goes in. The design doesn't change. Returns profiles: [the entry saved, with folder and file]"
+        )),
+    CommandSpec::new("frame.personal.folders", "Profile Folders", crate::checked!("frame.personal.folders", personal_folders))
+        .icon("library")
+        .noundo()
+        .doc_only()
+        .contract(&PERSONAL_FOLDERS_CONTRACT)
+        .output(output_schema_for::<PersonalFoldersResult>)
+        .params("folders?: [paths, in order; empty: the default folder in SolidCraft's data folder] sets them. Returns folders: [{path, writable, profiles, error?}]. Each folder's subfolders, up to three levels, are the categories its profiles are filed under; where two folders have a profile of the same name, the earlier one's is offered"),
 ];
 
 fn reply(cmd: &str, r: impl serde::Serialize) -> Result<Value> {
@@ -589,7 +611,17 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
 fn personal_list(_s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "frame.personal.list";
     let _: PersonalListParams = typed(cmd, p)?;
-    reply(cmd, PersonalProfilesResult { profiles: Vec::new(), replace: false, param_warnings: Vec::new() })
+    reply(
+        cmd,
+        PersonalProfilesResult {
+            profiles: Vec::new(),
+            replace: false,
+            folder: None,
+            folders: Vec::new(),
+            skipped: Vec::new(),
+            param_warnings: Vec::new(),
+        },
+    )
 }
 
 fn personal_add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -606,8 +638,80 @@ fn personal_add(s: &mut Session, p: &Value) -> Result<Value> {
         (None, _, _) => library_from(cmd, &a.path, &a.library)?.profiles,
         _ => return Err(bad(cmd, "give `id` (a profile of the design's library), `path` (a library file) or `library`, one of them")),
     };
+    let folder = folder_key(cmd, a.folder)?;
+    personal_reply(cmd, &entries, a.replace.unwrap_or(false), folder)
+}
+
+/// The profiles `add` and `save` give the app, with what the call asked for.
+fn personal_reply(cmd: &str, entries: &[LibraryProfile], replace: bool, folder: Option<String>) -> Result<Value> {
     let profiles = entries.iter().map(|e| serde_json::to_value(e).map(EntryJson).map_err(|err| bad(cmd, err.to_string()))).collect::<Result<_>>()?;
-    reply(cmd, PersonalProfilesResult { profiles, replace: a.replace.unwrap_or(false), param_warnings: Vec::new() })
+    reply(cmd, PersonalProfilesResult { profiles, replace, folder, folders: Vec::new(), skipped: Vec::new(), param_warnings: Vec::new() })
+}
+
+/// A `folder` as given: a path, or a number in the folder list from 1; not blank.
+fn folder_key(cmd: &str, folder: Option<String>) -> Result<Option<String>> {
+    match folder.map(|f| f.trim().to_string()) {
+        Some(f) if f.is_empty() || f.len() > 4096 => Err(bad(cmd, "`folder` is a profile folder's path or its number from 1")),
+        f => Ok(f),
+    }
+}
+
+/// `frame.personal.save`: the entry a sketch's section (or a built-in profile) makes, with the
+/// design's parameters kept as their values, for the app to write to a profile folder. The design
+/// doesn't change.
+fn personal_save(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.personal.save";
+    let a: PersonalSaveParams = typed(cmd, p)?;
+    if a.profile.is_none() && a.profile_sketch.is_none() {
+        return Err(bad(cmd, "give `profile` (a built-in profile) or `profile_sketch` (a sketch), one of them"));
+    }
+    let name = personal_name(cmd, &a.name)?.to_string();
+    let mut e = LibraryProfile {
+        id: library::next_id(&s.doc.frame_profiles),
+        name,
+        category: Vec::new(),
+        section: LibrarySection::Drawn { regions: Vec::new() },
+        points: Vec::new(),
+        default_point: None,
+        material: None,
+        description: None,
+        stock_length: None,
+    };
+    let changes = Changes {
+        category: &a.category,
+        profile: a.profile.as_ref().map(|x| &x.0),
+        profile_sketch: a.profile_sketch.as_ref().map(|x| x.0.as_str()),
+        profiles: a.profiles.as_ref().map(|x| &x.0),
+        points: &a.points,
+        default_point: &a.default_point,
+        material: &a.material,
+        description: &a.description,
+        stock_length: &a.stock_length,
+    };
+    apply(s, cmd, &mut e, &changes)?;
+    let e = e.portable(mm(s)).map_err(|err| bad(cmd, format!("{}: {err}", e.name)))?;
+    let folder = folder_key(cmd, a.folder)?;
+    personal_reply(cmd, &[e], a.replace.unwrap_or(false), folder)
+}
+
+/// `frame.personal.folders`: the folders asked for, checked; the app sets and reads them.
+fn personal_folders(_s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.personal.folders";
+    let a: PersonalFoldersParams = typed(cmd, p)?;
+    if !a.paths_ok() {
+        return Err(bad(
+            cmd,
+            format!("`folders` is at most {} paths, none blank or over 4096 bytes", crate::schema::frame_library::MAX_PROFILE_FOLDERS),
+        ));
+    }
+    let set = a.folders.is_some();
+    let folders = a
+        .folders
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| crate::schema::frame_library::FolderOut { path: path.trim().to_string(), writable: false, profiles: 0, error: None })
+        .collect();
+    reply(cmd, PersonalFoldersResult { folders, set, param_warnings: Vec::new() })
 }
 
 /// A personal profile's name as given: trimmed, 1…96 bytes.

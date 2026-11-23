@@ -1378,13 +1378,13 @@ fn member_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut [
 /// whose names the design's doesn't have (the design's own wins).
 fn offered(app: &SolveApp) -> Vec<&frame_library::LibraryProfile> {
     let design = &app.session.doc.frame_profiles;
-    let personal = app.preferences.frame_profiles.0.iter().filter(|p| !design.iter().any(|e| e.name.eq_ignore_ascii_case(&p.name)));
+    let personal = crate::frame_personal::entries(app).into_iter().filter(|p| !design.iter().any(|e| e.name.eq_ignore_ascii_case(&p.name)));
     design.iter().chain(personal).collect()
 }
 
 /// The profile the window's `library` id names: the design's, or a personal one.
 fn library_entry<'a>(app: &'a SolveApp, id: &str) -> Option<&'a frame_library::LibraryProfile> {
-    app.session.doc.library_profile(id).or_else(|| app.preferences.frame_profiles.get(id))
+    app.session.doc.library_profile(id).or_else(|| crate::frame_personal::get(app, id))
 }
 
 /// The library's rows: Type (Built-in or a top-level category), a Group row for each level of
@@ -1861,7 +1861,7 @@ fn flat_commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<St
         }
     } else if let Some(id) = &m.library {
         // A personal profile goes whole: the member copies it into the design's library.
-        p["library"] = match app.preferences.frame_profiles.get(id) {
+        p["library"] = match crate::frame_personal::get(app, id) {
             Some(e) if app.session.doc.library_profile(id).is_none() => crate::frame_personal::member_library(e),
             _ => json!(id),
         };
