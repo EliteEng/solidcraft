@@ -103,6 +103,36 @@ every edit to it: change its dimensions, or a parameter they use, and the member
 
 `id` takes a library profile's id (`lp1`) or its name. Ids are never reused in a design.
 
+### Library files and the personal library
+
+A library file (`solidcraft-frame-profiles/1`, JSON) carries profiles between designs and people,
+so a shop can keep its stock list in one place. An exported profile that reads the design's
+parameters is written with their values (`"wall": "3 mm"`), so it means the same in any design.
+
+- `frame.library.export` `{ids?, path?}`: the library (or the profiles named) as a library file,
+  written to `path` when given.
+- `frame.library.import` `{path | library, names?}`: adds the file's profiles (or those named) to
+  the design's library. A profile the library has already, the same apart from its id, is reused;
+  a name it has for a different profile takes ` (2)`. Undo takes the import back.
+
+The personal library is kept with your preferences and offered in every design. It is yours, not
+the design's: choosing a personal profile in Frame Member copies it into the design's library when
+the member is made (or reuses the same profile there), so the design never depends on it.
+
+- `frame.personal.list`: the personal profiles.
+- `frame.personal.add` `{id | path | library, replace?}`: adds a profile of the design's library
+  (its parameters kept as values), or every profile of a library file. A name the personal library
+  has is refused unless `replace` is true.
+- `frame.personal.remove` `{name}`: designs that use the profile keep their copy.
+- `frame.personal.export` `{names?, path?}`: the personal profiles as a library file.
+- `frame.member` also takes a whole profile as `library` (as `frame.personal.list` lists it), and
+  adds it to the design's library.
+
+In Frame Member, personal profiles appear in Type and Size beside the design's, marked
+**(personal)**; a design profile of the same name hides the personal one. **Also save to personal
+library** makes Save to Library add the profile to both (replacing a personal profile of the same
+name).
+
 ## Placement points
 
 A placement point is a named point of a profile that can sit on a member's line. Every profile has

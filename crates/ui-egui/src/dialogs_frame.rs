@@ -124,6 +124,8 @@ pub struct Member {
     pub save_requested: bool,
     /// The Save as and Category rows are shown (Save to Library was pressed once).
     pub save_open: bool,
+    /// Save to Library also adds the profile to the personal library, offered in every design.
+    pub save_personal: bool,
     /// A placement point by name beyond the anchors (a kind's own points, a library profile's), or
     /// with a library profile any point the member names instead of the profile's default.
     pub point: Option<String>,
@@ -469,6 +471,7 @@ impl Member {
             save_category: String::new(),
             save_requested: false,
             save_open: false,
+            save_personal: false,
             point: None,
             angle: String::new(),
             mirror: false,
@@ -1354,6 +1357,7 @@ fn member_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut [
             let (name, category) = save_defaults(app, m, inputs);
             enter |= text_row(ui, "ui.frame_save_name", &mut m.save_name, &name).0;
             enter |= text_row(ui, "ui.frame_category", &mut m.save_category, &category).0;
+            form_row(ui, "ui.frame_save_personal", |ui| check(ui, &mut m.save_personal));
         }
         if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.frame_save_to_library"), crate::ui_kit::Button::Normal).clicked() {
             if m.save_open {
@@ -1370,11 +1374,25 @@ fn member_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut [
     enter
 }
 
+/// The profiles the window offers: the design's library, then the personal library's profiles
+/// whose names the design's doesn't have (the design's own wins).
+fn offered(app: &SolveApp) -> Vec<&frame_library::LibraryProfile> {
+    let design = &app.session.doc.frame_profiles;
+    let personal = app.preferences.frame_profiles.0.iter().filter(|p| !design.iter().any(|e| e.name.eq_ignore_ascii_case(&p.name)));
+    design.iter().chain(personal).collect()
+}
+
+/// The profile the window's `library` id names: the design's, or a personal one.
+fn library_entry<'a>(app: &'a SolveApp, id: &str) -> Option<&'a frame_library::LibraryProfile> {
+    app.session.doc.library_profile(id).or_else(|| app.preferences.frame_profiles.get(id))
+}
+
 /// The library's rows: Type (Built-in or a top-level category), a Group row for each level of
 /// subcategories, and Size (the profiles in the chosen folder and below). Choosing a folder picks
-/// its first profile, so a library profile is always chosen unless Type is Built-in.
+/// its first profile, so a library profile is always chosen unless Type is Built-in. Personal
+/// profiles are marked; OK copies the one chosen into the design's library.
 fn library_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member) {
-    let library = &app.session.doc.frame_profiles;
+    let library = offered(app);
     if library.is_empty() {
         (m.library, m.folder) = (None, None);
         return;
@@ -1385,7 +1403,7 @@ fn library_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member) {
     {
         m.folder = Some(e.category.clone());
     }
-    let tops = subfolders(library, &[]);
+    let tops = subfolders(&library, &[]);
     let uncategorised = library.iter().any(|e| e.category.is_empty());
     let mut labels: Vec<&str> = vec![tr("Built-in")];
     labels.extend(tops.iter().map(String::as_str));
@@ -1415,7 +1433,7 @@ fn library_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member) {
         if folder.len() < level {
             break;
         }
-        let subs = subfolders(library, &folder[..level]);
+        let subs = subfolders(&library, &folder[..level]);
         if subs.is_empty() {
             break;
         }
@@ -1431,13 +1449,23 @@ fn library_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member) {
             }
         }
     }
-    let entries = profiles_in(library, &folder);
+    let entries = profiles_in(&library, &folder);
     let Some(first) = entries.first() else {
         // The folder is gone (its profiles were removed or moved): back to the built-in profiles.
         (m.library, m.folder) = (None, None);
         return;
     };
-    let labels: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    let shown: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            if e.id.starts_with(crate::frame_personal::ID_PREFIX) {
+                solidcraft_ui_text::format("ui.frame_personal_profile", &[("name", &e.name)])
+            } else {
+                e.name.clone()
+            }
+        })
+        .collect();
+    let labels: Vec<&str> = shown.iter().map(String::as_str).collect();
     let mut index = m.library.as_ref().and_then(|id| entries.iter().position(|e| &e.id == id)).unwrap_or(0);
     choice_row(ui, "Size", "frame_library_size", &mut index, &labels);
     let chosen = entries.get(index).unwrap_or(first).id.clone();
@@ -1451,7 +1479,7 @@ fn library_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member) {
 }
 
 /// The folders one level below `folder`, in natural order (`50x25` before `100x50`).
-fn subfolders(library: &[frame_library::LibraryProfile], folder: &[String]) -> Vec<String> {
+fn subfolders(library: &[&frame_library::LibraryProfile], folder: &[String]) -> Vec<String> {
     let mut subs: Vec<String> =
         library.iter().filter(|e| e.category.starts_with(folder)).filter_map(|e| e.category.get(folder.len()).cloned()).collect();
     subs.sort_by(|a, b| natural(a, b));
@@ -1461,9 +1489,9 @@ fn subfolders(library: &[frame_library::LibraryProfile], folder: &[String]) -> V
 
 /// The profiles in `folder` and its subfolders, in natural order by name; an empty folder holds the
 /// profiles without a category.
-fn profiles_in<'a>(library: &'a [frame_library::LibraryProfile], folder: &[String]) -> Vec<&'a frame_library::LibraryProfile> {
+fn profiles_in<'a>(library: &[&'a frame_library::LibraryProfile], folder: &[String]) -> Vec<&'a frame_library::LibraryProfile> {
     let mut entries: Vec<_> =
-        library.iter().filter(|e| if folder.is_empty() { e.category.is_empty() } else { e.category.starts_with(folder) }).collect();
+        library.iter().copied().filter(|e| if folder.is_empty() { e.category.is_empty() } else { e.category.starts_with(folder) }).collect();
     entries.sort_by(|a, b| natural(&a.name, &b.name));
     entries
 }
@@ -1572,7 +1600,7 @@ fn point_names(app: &SolveApp, m: &Member, sketch_section: bool) -> Vec<String> 
         return names;
     }
     let kinds = frame::profile_kinds();
-    let (kind, named) = match m.library.as_ref().and_then(|id| app.session.doc.library_profile(id)) {
+    let (kind, named) = match m.library.as_ref().and_then(|id| library_entry(app, id)) {
         Some(e) => {
             let kind = match &e.section {
                 frame_library::LibrarySection::BuiltIn { profile } => Some(profile.kind.as_str()),
@@ -1604,7 +1632,7 @@ fn point_label(name: &str) -> String {
 /// choice is its default point; otherwise it is the origin.
 fn point_row(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, sketch_section: bool) {
     let names = point_names(app, m, sketch_section);
-    let library = m.library.as_ref().and_then(|id| app.session.doc.library_profile(id));
+    let library = m.library.as_ref().and_then(|id| library_entry(app, id));
     let mut labels: Vec<String> = Vec::new();
     if let Some(e) = library {
         let default = e.default_point.as_deref().unwrap_or("origin");
@@ -1643,6 +1671,11 @@ pub(crate) fn save_requested(app: &mut SolveApp) {
     let saved = save_to_library(app, &m, &inputs);
     match saved {
         Ok(id) => {
+            if m.save_personal
+                && let Err(e) = app.run("frame.personal.add", json!({"id": id, "replace": true}))
+            {
+                app.set_status(e, true);
+            }
             let folder = app.session.doc.library_profile(&id).map(|e| e.category.clone());
             if let Some(Kind::Frame(m)) = app.dialog.as_mut().map(|d| &mut d.kind) {
                 m.folder = folder;
@@ -1827,7 +1860,11 @@ fn flat_commands(app: &SolveApp, m: &Member, inputs: &[SelInput], extra: &Map<St
             p["profiles"] = json!(section.iter().map(|x| x.1).collect::<Vec<_>>());
         }
     } else if let Some(id) = &m.library {
-        p["library"] = json!(id);
+        // A personal profile goes whole: the member copies it into the design's library.
+        p["library"] = match app.preferences.frame_profiles.get(id) {
+            Some(e) if app.session.doc.library_profile(id).is_none() => crate::frame_personal::member_library(e),
+            _ => json!(id),
+        };
     } else {
         p["profile"] = builtin_profile(m)?;
     }

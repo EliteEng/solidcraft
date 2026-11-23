@@ -1890,6 +1890,9 @@ preference_settings! {
     /// viewer can move each part on its own (#5296). Off: every body under the root in world
     /// coordinates, named as the model names it, as SolidCraft 0.40 wrote it.
     glb_export_hierarchy: bool = true, PAGE_DESIGN => check_id_help("ui.glb_export_hierarchy", "ui.glb_export_hierarchy_help");
+    /// The personal frame profile library, offered by Frame Member in every design in this profile
+    /// (`frame.personal.*`, docs/frames.md). No page reset discards this user-authored library.
+    frame_profiles: crate::frame_personal::Library = crate::frame_personal::Library::default();
     /// Save as mesh: the last format (`stl` or `3mf`). Older versions also kept a "send to slicer"
     /// choice here (`save_mesh_send`, `save_mesh_slicer`); a settings file that still has them loads,
     /// and they are ignored.

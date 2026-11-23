@@ -3064,7 +3064,7 @@ fn library_folders_and_sizes() {
         description: None,
         stock_length: None,
     };
-    let library = vec![
+    let owned = [
         entry("100x50x3.0 RHS", &["Steel", "RHS"]),
         entry("63.5x38x2.5 RHS", &["Steel", "RHS"]),
         entry("50x20x1.6 RHS", &["Steel", "RHS"]),
@@ -3073,6 +3073,7 @@ fn library_folders_and_sizes() {
         entry("Flat 50x6", &["Aluminium"]),
         entry("Odd one", &[]),
     ];
+    let library: Vec<&frame_library::LibraryProfile> = owned.iter().collect();
     assert_eq!(subfolders(&library, &[]), ["Aluminium", "Steel"]);
     assert_eq!(subfolders(&library, &["Steel".into()]), ["Channel", "RHS"]);
     assert!(subfolders(&library, &["Aluminium".into()]).is_empty());
@@ -3084,4 +3085,40 @@ fn library_folders_and_sizes() {
     assert_eq!(names(&["Steel"]), ["50x20x1.6 RHS", "50x20x2.0 RHS", "63.5x38x2.5 RHS", "100 PFC", "100x50x3.0 RHS"]);
     assert_eq!(names(&[]), ["Odd one"]);
     assert!(names(&["Timber"]).is_empty());
+}
+
+/// A personal profile is offered in another design, marked as personal; OK copies it into that
+/// design's library, and editing the member finds the design's copy.
+#[test]
+fn a_personal_profile_is_offered_and_copied_into_the_design() {
+    let mut first = frame_app();
+    first
+        .run(
+            "frame.library.add",
+            json!({"name": "L50", "category": ["Angle"], "profile": {"kind": "angle", "width": 50, "height": 50, "thickness": 5}}),
+        )
+        .unwrap();
+    first.run("frame.personal.add", json!({"id": "lp1"})).unwrap();
+    let mut app = frame_app();
+    app.preferences.frame_profiles = first.preferences.frame_profiles.clone();
+    let ids: Vec<String> = offered(&app).iter().map(|e| e.id.clone()).collect();
+    assert_eq!(ids, ["personal:l50"]);
+    let lines = frame_lines(&app);
+    let mut d = dialog_on(&mut app, &lines[..1]);
+    member(&mut d).library = Some("personal:l50".into());
+    member(&mut d).point = Some("heel_inside".into());
+    assert!(point_names(&app, member(&mut d), false).contains(&"toe_x".to_string()), "a personal profile's points are offered");
+    let c = apply_commands(&app, &d).unwrap();
+    let p = &c[0].1;
+    assert_eq!(p["library"]["name"], "L50", "the personal profile goes whole: {p}");
+    assert!(p["library"].get("id").is_none(), "{p}");
+    run_all(&mut app, c);
+    assert_eq!(body_names(&app), ["L50"]);
+    assert_eq!(app.session.doc.frame_profiles.iter().map(|e| (e.id.as_str(), e.name.as_str())).collect::<Vec<_>>(), [("lp1", "L50")]);
+    // The design's copy is offered now, not the personal one beside it.
+    let ids: Vec<String> = offered(&app).iter().map(|e| e.id.clone()).collect();
+    assert_eq!(ids, ["lp1"]);
+    let f = app.session.doc.features.last().unwrap().id;
+    let mut e = edit_dialog(&app, f, None).unwrap();
+    assert_eq!(member(&mut e).library.as_deref(), Some("lp1"));
 }

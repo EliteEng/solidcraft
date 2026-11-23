@@ -491,10 +491,20 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
                 .to_string(),
         ),
     };
+    // A whole library profile given as `library` joins the design's library with the member.
+    let mut library = None;
     let (profile, default_name) = match (p.get("profile"), p.get("profile_sketch"), p.get("library")) {
+        (None, None, Some(v)) if v.is_object() => {
+            let (lib, profile, name) = super::frame_library::member_entry(s, cmd, v)?;
+            library = Some(lib);
+            (profile, name)
+        }
         (None, None, Some(v)) => {
-            let key =
-                v.as_str().map(str::trim).filter(|k| !k.is_empty()).ok_or_else(|| bad(cmd, "`library` must be a library profile's id or name"))?;
+            let key = v
+                .as_str()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| bad(cmd, "`library` must be a library profile's id or name, or a whole library profile"))?;
             super::frame_library::member_profile(s, cmd, key)?
         }
         (Some(_), None, None) => {
@@ -714,6 +724,9 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
         o.remove("body_name");
         o.remove("body_names");
         o.remove("names");
+    }
+    if let Some(lib) = library.filter(|lib| *lib != s.doc.frame_profiles) {
+        s.doc_mut().frame_profiles = lib;
     }
     add_feature(s, &p, kind)
 }

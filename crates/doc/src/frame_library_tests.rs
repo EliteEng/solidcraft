@@ -194,3 +194,67 @@ fn entries_save_and_read_back_and_ids_are_never_reused() {
     assert_eq!(find(&lib, "shs 40X40x3").map(|p| p.id.as_str()), Some("lp7"));
     assert_eq!(find(&lib, "lp7").map(|p| p.name.as_str()), Some("SHS 40x40x3"));
 }
+
+#[test]
+fn merging_reuses_the_same_entry_and_renames_on_a_clash() {
+    let tube = entry(LibrarySection::BuiltIn { profile: spec(serde_json::json!({"kind": "rect_tube", "width": 40, "height": 40, "wall": 3})) });
+    let mut lib = vec![tube.clone()];
+    // The same profile under another id is the one there already.
+    assert_eq!(merge(&mut lib, LibraryProfile { id: String::new(), ..tube.clone() }).unwrap(), ("lp1".to_string(), true));
+    // The same name for another section takes the next free name and id.
+    let thicker = LibraryProfile {
+        id: "elsewhere".into(),
+        name: "shs 40x40x3".into(),
+        section: LibrarySection::BuiltIn { profile: spec(serde_json::json!({"kind": "rect_tube", "width": 40, "height": 40, "wall": 4})) },
+        ..tube.clone()
+    };
+    assert_eq!(merge(&mut lib, thicker.clone()).unwrap(), ("lp2".to_string(), false));
+    assert_eq!(lib[1].name, "shs 40x40x3 (2)");
+    let again =
+        LibraryProfile { section: LibrarySection::BuiltIn { profile: spec(serde_json::json!({"kind": "round_bar", "diameter": 9})) }, ..thicker };
+    merge(&mut lib, again).unwrap();
+    assert_eq!(lib[2].name, "shs 40x40x3 (3)");
+}
+
+#[test]
+fn a_portable_entry_keeps_parameters_as_their_values() {
+    let mut e = entry(LibrarySection::BuiltIn { profile: spec(serde_json::json!({"kind": "rect_tube", "width": 40, "height": "h", "wall": 3})) });
+    e.stock_length = Some(Expr::new("len"));
+    let values = |_: &str, ex: &Expr, kind: crate::expr::Kind| match ex.trim() {
+        "h" => Ok(25.0),
+        "len" => Ok(6000.0),
+        other => mm("", &Expr::new(other), kind),
+    };
+    let p = e.portable(values).unwrap();
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(json["section"]["profile"]["height"], "25 mm");
+    assert_eq!(json["section"]["profile"]["width"], "40", "plain values are left as they are");
+    assert_eq!(p.stock_length.as_ref().map(|x| x.to_string()), Some("6000 mm".to_string()));
+    assert!(p.references().is_empty());
+}
+
+#[test]
+fn library_files_check_their_format_names_and_entries() {
+    let tube = entry(LibrarySection::BuiltIn { profile: spec(serde_json::json!({"kind": "round_bar", "diameter": 10})) });
+    let file = LibraryFile::new(vec![tube.clone()]);
+    let json = serde_json::to_value(&file).unwrap();
+    assert_eq!(json["format"], LIBRARY_FILE_FORMAT);
+    assert!(json["profiles"][0].get("id").is_none(), "a file leaves design ids out: {json}");
+    assert_eq!(LibraryFile::from_json(json.clone()).unwrap(), file);
+    let refused = |v: serde_json::Value, want: &str| {
+        let err = LibraryFile::from_json(v).unwrap_err().to_string();
+        assert!(err.contains(want), "{err} (wanted {want})");
+    };
+    refused(serde_json::json!({"profiles": []}), "the format must be");
+    let mut twice = json.clone();
+    twice["profiles"] = serde_json::json!([json["profiles"][0], json["profiles"][0]]);
+    refused(twice, "names `SHS 40x40x3` twice");
+    let mut extra = json.clone();
+    extra["surprise"] = serde_json::json!(1);
+    refused(extra, "not readable");
+    let mut bad = json.clone();
+    bad["profiles"][0]["name"] = serde_json::json!(" padded");
+    refused(bad, "without spaces");
+    let many = serde_json::json!({"format": LIBRARY_FILE_FORMAT, "profiles": vec![serde_json::Value::Null; MAX_LIBRARY_PROFILES + 1]});
+    refused(many, "at most 1000");
+}

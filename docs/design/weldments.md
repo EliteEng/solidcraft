@@ -149,12 +149,13 @@ only.)
 
 | Command | Does |
 |---|---|
-| `frame.library.list {scope?: design\|personal\|all}` | entries, their categories, points and properties |
-| `frame.library.add {name, category?, size?, profile \| sketch \| from_sketch, points?, material?, stock_length?, scope?}` | adds an entry; `from_sketch` copies a timeline sketch's section in |
+| `frame.library.list` | entries, their categories, points and properties |
+| `frame.library.add {name, category?, profile \| profile_sketch, points?, default_point?, material?, description?, stock_length?}` | adds an entry; `profile_sketch` copies a sketch's section in |
 | `frame.library.edit {id, ...}` | changes an entry; members follow |
 | `frame.library.remove {id}` | refused while members use it |
 | `frame.library.replace {from, to}` | moves every member from one entry to another |
-| `frame.library.import {path \| json, scope}` / `frame.library.export {ids?, scope}` | library files |
+| `frame.library.import {path \| library, names?}` / `frame.library.export {ids?, path?}` | library files, in and out of the design |
+| `frame.personal.list` / `.add {id \| path \| library, replace?}` / `.remove {name}` / `.export {names?, path?}` | the personal library, kept by the app |
 | `frame.profile.points {profile \| library}` | every placement point and its position (mm) |
 
 ## 2. Member features with groups
@@ -456,8 +457,10 @@ adds its one pending format file.
    { id }` and `point` on `frame.member`, and in the Frame Member window a Library row, a Point row
    and Save to Library. Tests: each kind's generated points against hand-computed positions; edit
    an entry or a parameter it uses, members follow; remove refused while in use; save and reopen.
-2. **Personal library and library files.** The preference store, import, export, and copy into the
-   design on first use.
+2. **Personal library and library files** (built on branch `frame-profile-library`). The preference
+   store, `frame.library.import`/`export`, `frame.personal.list`/`add`/`remove`/`export`, and copy
+   into the design on first use (`frame.member` takes a whole entry as `library`). Frame Member's
+   Type, Group and Size rows offer personal profiles beside the design's.
 3. **Groups and junctions.** `groups`, `CornerDefaults`, the junction graph and its ids, mitre and
    butt (square and flush) with gaps, and the old-design `step`. Tests: a rectangle mitres into
    four members with exact 45° faces and the given gap; a T butts; a 3D corner mitres; old designs
