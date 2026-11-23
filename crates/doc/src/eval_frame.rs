@@ -17,6 +17,7 @@ use crate::expr::{Expr, Kind, Value};
 use crate::frame::{self, CornerOverride, CornerType, MAX_MEMBERS, MemberGroup, MemberPair, MemberProfile, MemberRef};
 use crate::frame_corners::{self, Corner, Cut, Override};
 use crate::frame_layout::{self, ChainCorner, Fit, Joint, MemberPlane, Plan};
+use crate::frame_library;
 use crate::frame_multi_trim;
 use crate::lineage::Traced;
 use crate::{DocError, Document, Feature, FeatureId, FeatureKind, ProfileSel, Result};
@@ -45,7 +46,7 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
             return Err(DocError::Invalid("not a frame member feature".into()));
         };
         let (ids, _) = member_parts(st, &f.kind)?;
-        let default = profile_regions(vals, st, profile)?.1;
+        let default = profile_regions(doc, vals, st, profile)?.description;
         let bases = group_bases(&f.kind, &default, ids.len());
         let pinned = ids.iter().cloned().zip(group_member_names(st, &ids, &bases, names)).collect::<BTreeMap<_, _>>();
         let mut joint = f.clone();
@@ -59,7 +60,7 @@ pub(super) fn evaluate(doc: &Document, vals: &BTreeMap<String, Value>, f: &Featu
             return Err(DocError::Invalid("not a frame member feature".into()));
         };
         let (ids, _) = member_parts(st, &f.kind)?;
-        let default = profile_regions(vals, st, profile)?.1;
+        let default = profile_regions(doc, vals, st, profile)?.description;
         let bases = group_bases(&f.kind, &default, ids.len());
         let pinned = ids.iter().cloned().zip(group_member_names(st, &ids, &bases, names)).collect::<BTreeMap<_, _>>();
         let (start, counter) = (st.bodies.len(), st.body_counter);
@@ -1886,40 +1887,26 @@ fn layout(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, st: &Mode
     }
     let first = groups.first().cloned().unwrap_or_default();
     let (segments, sketch_x, drawn, planes) = segments(doc, vals, f, st)?;
-    let (mut regions, description, origin) = profile_regions(vals, st, profile)?;
+    let section = profile_regions(doc, vals, st, profile)?;
+    let description = section.description.clone();
     // Several groups share one section: they agree on Mirror ([`frame::check_group_options`]).
     let mirror = first.mirror;
-    if mirror {
-        regions = regions.iter().map(frame::mirrored).collect();
-    }
-    // A group's profile point on its lines and its turn about them.
-    let place = |g: &frame::MemberGroup| -> Result<(Vec2, f64)> {
-        let at = match g.locate {
-            Some([x, y]) => {
-                // A design file is hostile input: the command checks the point, a file may not.
-                if !(x.is_finite() && y.is_finite() && x.abs() <= frame::MAX_PROFILE_SIZE && y.abs() <= frame::MAX_PROFILE_SIZE) {
-                    return Err(DocError::Invalid(format!("frame member `locate` must be two finite lengths within {} mm", frame::MAX_PROFILE_SIZE)));
-                }
-                // `locate` is the profile point that sits on the line, measured from the profile's
-                // own origin (`Profile::origin`). The built-in region is centred on its bounding
-                // box, so that origin moves when the section's size changes, and the located point
-                // moves with it: the member stays attached at the same point of its section.
-                let p = origin + Vec2::new(x, y);
-                if mirror { Vec2::new(-p.x, p.y) } else { p }
-            }
-            None => frame::anchor_point(&regions, g.anchor),
-        };
+    // A group's profile point on its lines and its turn about them: its placement point, else its
+    // `locate`, else its anchor, else a library profile's default point ([`placed_section`]).
+    let place = |g: &frame::MemberGroup| -> Result<(Vec<Region2>, Vec2, f64)> {
+        let (regions, at) = placed_section(section.clone(), g.anchor, g.point.as_deref(), g.locate, mirror)?;
         let turn = match &g.angle {
             Some(e) => val(vals, e, Kind::Angle)?,
             None => 0.0,
         };
-        Ok((at, turn))
+        Ok((regions, at, turn))
     };
-    let (at, turn) = place(&first)?;
+    let (mut regions, at, turn) = place(&first)?;
     let mut placing = BTreeMap::new();
     if groups.len() > 1 {
         for g in &groups {
-            let p = place(g)?;
+            let (_, a, t) = place(g)?;
+            let p = (a, t);
             placing.extend(g.lines.iter().map(|l| (l.clone(), p)));
         }
     }
@@ -2352,7 +2339,7 @@ pub(super) fn members_at(doc: &Document, st: &ModelState, f: &Feature, bodies: &
         return Ok(bodies.iter().map(|b| if made == ids.len() { at(b) } else { None }).collect());
     }
     if matches!(&f.kind, FeatureKind::FrameMember { groups, .. } if !groups.is_empty()) {
-        let default = profile_regions(&doc.evaluation_values(), st, profile).map(|r| r.1).unwrap_or_default();
+        let default = profile_regions(doc, &doc.evaluation_values(), st, profile).map(|r| r.description).unwrap_or_default();
         let bases = group_bases(&f.kind, &default, ids.len());
         let before = state_before(doc, st, f);
         let named = match before.as_deref() {
@@ -2364,7 +2351,7 @@ pub(super) fn members_at(doc: &Document, st: &ModelState, f: &Feature, bodies: &
     // The names evaluation gives (`built`): against the bodies of everything but this feature.
     let base = match body_name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         Some(n) => n.to_string(),
-        None => profile_regions(&doc.evaluation_values(), st, profile).map(|r| r.1).unwrap_or_default(),
+        None => profile_regions(doc, &doc.evaluation_values(), st, profile).map(|r| r.description).unwrap_or_default(),
     };
     // Against the state just before the frame was built when its bodies keep it, so a later join that frees a name
     // moves no unpinned name; else against everything but this feature's bodies now.
@@ -2611,6 +2598,20 @@ fn drawn_order(sk: &Sketch, segments: &[(String, Vec3, Vec3)]) -> Vec<usize> {
     segments.iter().map(|(id, _, _)| rank(id)).collect()
 }
 
+/// The section of profile sketch `sketch` as a member would take it (its material, or the
+/// `profiles` picked), in the sketch's own x and y: one piece of material, holes and all. This is
+/// what a library profile copies when it is made from a sketch.
+pub fn sketch_section(doc: &Document, st: &ModelState, sketch: crate::SketchId, profiles: &ProfileSel) -> Result<Vec<Region2>> {
+    let profile = MemberProfile::Sketch { sketch, profiles: profiles.clone() };
+    Ok(profile_regions(doc, &BTreeMap::new(), st, &profile)?.regions)
+}
+
+/// Where point `id` of sketch `sketch` is, in the sketch's own x and y.
+pub fn sketch_point(st: &ModelState, sketch: crate::SketchId, id: &str) -> Option<Vec2> {
+    let ss = st.sketch(sketch.0)?;
+    ss.sketch.point(ss.sketch.point_index(id)?)
+}
+
 /// The member lines of the frame sketch, each as (curve id, start, end) in its frame: the lines
 /// asked for, or every straight line drawn in it ([`is_member_line`], with a length).
 fn member_lines(ss: &SolvedSketch, ids: &[String]) -> Result<Vec<(String, Vec3, Vec3)>> {
@@ -2688,14 +2689,89 @@ fn straight(pts: &[Vec3]) -> Option<(Vec3, Vec3)> {
     Some((a, b))
 }
 
-/// The regions of a member's profile, in the profile's own coordinates: one piece of material,
-/// holes and all; and what its members are named after when they have no name of their own.
-pub(super) fn profile_regions(vals: &BTreeMap<String, Value>, st: &ModelState, profile: &MemberProfile) -> Result<(Vec<Region2>, String, Vec2)> {
-    let (regions, description, origin) = match profile {
-        MemberProfile::Library { profile } => {
-            let p = profile.resolve(|name, e, kind| val(vals, e, kind).map_err(|err| DocError::Invalid(format!("profile `{name}`: {err}"))))?;
-            let origin = p.origin();
-            (vec![p.region()?], profile.size.clone().unwrap_or_else(|| p.description()), origin)
+/// A member's section before it is placed on a line: its regions in the profile's own
+/// coordinates, its placement points, the point a library profile starts on, what its members
+/// are named after when they have no name of their own, and the profile's own origin (the point
+/// a built-in profile's dimensions are measured from, which `locate` is measured from).
+#[derive(Clone)]
+pub(super) struct MemberSection {
+    pub regions: Vec<Region2>,
+    pub points: Vec<(String, Vec2)>,
+    pub default_point: Option<String>,
+    pub description: String,
+    pub origin: Vec2,
+}
+
+/// The section's regions as they are placed (mirrored across the profile's y axis when asked), and
+/// the point of them that sits on the line: the placement point named `point`; else the `locate`d
+/// point, measured from the profile's origin; else `anchor` when it isn't the origin; else a library
+/// profile's default point; else the origin. A mirrored profile's bounding-box points are those of
+/// the mirrored outline (its `top_left` is still at the top left); the points its kind generates or
+/// its entry names move with the material (its `heel` stays the heel).
+pub(super) fn placed_section(
+    section: MemberSection,
+    anchor: frame::Anchor,
+    point: Option<&str>,
+    locate: Option<[f64; 2]>,
+    mirror: bool,
+) -> Result<(Vec<Region2>, Vec2)> {
+    let MemberSection { regions, points, default_point, origin, .. } = section;
+    let (regions, points) = if mirror {
+        let flipped: Vec<Region2> = regions.iter().map(frame::mirrored).collect();
+        let mut pts = frame_library::placement_points(&flipped, None, &[]);
+        pts.extend(points.into_iter().filter(|(n, _)| !frame_library::COMMON_POINTS.contains(&n.as_str())).map(|(n, v)| (n, Vec2::new(-v.x, v.y))));
+        (flipped, pts)
+    } else {
+        (regions, points)
+    };
+    let at = match (point, locate, default_point) {
+        (Some(name), _, _) => frame_library::find_point(&points, name)?,
+        (None, Some([x, y]), _) => {
+            // A design file is hostile input: the command checks the point, a file may not.
+            if !(x.is_finite() && y.is_finite() && x.abs() <= frame::MAX_PROFILE_SIZE && y.abs() <= frame::MAX_PROFILE_SIZE) {
+                return Err(DocError::Invalid(format!("frame member `locate` must be two finite lengths within {} mm", frame::MAX_PROFILE_SIZE)));
+            }
+            // Measured from the profile's own origin (`Profile::origin`): the built-in region is
+            // centred on its bounding box, so that origin moves when the section's size changes,
+            // and the located point moves with it.
+            let p = origin + Vec2::new(x, y);
+            if mirror { Vec2::new(-p.x, p.y) } else { p }
+        }
+        (None, None, _) if !anchor.is_origin() => frame::anchor_point(&regions, anchor),
+        (None, None, Some(name)) => frame_library::find_point(&points, &name)?,
+        (None, None, None) => Vec2::ZERO,
+    };
+    Ok((regions, at))
+}
+
+/// The section of a member's profile, in the profile's own coordinates: one piece of material,
+/// holes and all.
+pub(super) fn profile_regions(doc: &Document, vals: &BTreeMap<String, Value>, st: &ModelState, profile: &MemberProfile) -> Result<MemberSection> {
+    let (regions, description) = match profile {
+        MemberProfile::Library { profile: lp } => {
+            let p = lp.resolve(|name, e, kind| val(vals, e, kind).map_err(|err| DocError::Invalid(format!("profile `{name}`: {err}"))))?;
+            let regions = vec![p.region()?];
+            let points = frame_library::placement_points(&regions, Some(&p), &[]);
+            let description = lp.size.clone().unwrap_or_else(|| p.description());
+            return Ok(MemberSection { regions, points, default_point: None, description, origin: p.origin() });
+        }
+        MemberProfile::LibraryProfile { id } => {
+            let entry = doc
+                .library_profile(id)
+                .ok_or_else(|| DocError::Unknown(format!("library profile `{id}` (it was removed from the profile library)")))?;
+            let r = entry
+                .resolve(|label, e, kind| val(vals, e, kind).map_err(|err| DocError::Invalid(format!("profile `{label}`: {err}"))))
+                .map_err(|e| DocError::Invalid(format!("library profile {}: {e}", entry.name)))?;
+            if r.regions.len() != 1 {
+                return Err(DocError::Invalid(format!("library profile {} is {} separate pieces", entry.name, r.regions.len())));
+            }
+            return Ok(MemberSection {
+                regions: r.regions,
+                points: r.points,
+                default_point: entry.default_point.clone(),
+                description: entry.name.clone(),
+                origin: Vec2::ZERO,
+            });
         }
         MemberProfile::Sketch { sketch, profiles } => {
             let ss = st.sketch(sketch.0).ok_or_else(|| DocError::Unknown(format!("sketch {sketch} (it must come earlier in the timeline)")))?;
@@ -2703,11 +2779,14 @@ pub(super) fn profile_regions(vals: &BTreeMap<String, Value>, st: &ModelState, p
                 ProfileSel::All => material(ss)?,
                 sel => select_profiles(ss, sel)?,
             };
-            (solidcraft_sketch::merge_regions(&picked), ss.name.clone(), Vec2::ZERO)
+            (solidcraft_sketch::merge_regions(&picked), ss.name.clone())
         }
     };
     match regions.len() {
-        1 => Ok((regions, description, origin)),
+        1 => {
+            let points = frame_library::placement_points(&regions, None, &[]);
+            Ok(MemberSection { regions, points, default_point: None, description, origin: Vec2::ZERO })
+        }
         0 => Err(DocError::Invalid("the member profile has no area".into())),
         n => Err(DocError::Invalid(format!("the member profile is {n} separate pieces (pick one with `profiles`)"))),
     }

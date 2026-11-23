@@ -350,7 +350,7 @@ impl crate::walk::Walk for ProfileSpec {
 
 pub use crate::eval::frame_member::{
     LaterPieces, corner_at_point, corner_point, default_order, default_orders, group_member_names, is_crossing, is_member_line, is_member_wire,
-    member_line_ids, member_names, member_of_body, member_parts, member_segments, member_turns, members_cross, members_of_bodies, overlap_parent,
+    member_line_ids, member_names, member_of_body, member_parts, member_segments, member_turns, members_cross, members_of_bodies, overlap_parent, sketch_point, sketch_section,
 };
 pub use crate::frame_corners::{CornerOverride, CornerType, MAX_GAP, MemberRef, checked_gap, read_coped};
 
@@ -450,6 +450,9 @@ pub enum MemberProfile {
         #[walk(profiles_of = sketch)]
         profiles: crate::ProfileSel,
     },
+    /// A profile of the design's profile library (`Document::frame_profiles`), by id: editing the
+    /// entry changes the members.
+    LibraryProfile { id: String },
 }
 
 impl Anchor {
@@ -1017,6 +1020,10 @@ pub struct MemberGroup {
     /// ([`Profile::origin`]). Some: takes precedence over `anchor`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locate: Option<[f64; 2]>,
+    /// The placement point that sits on each line, by name: takes precedence over `locate` and
+    /// `anchor` ([`crate::frame_library::placement_points`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<String>,
     /// How far the profile turns about each line (see [`member_axes`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[walk(angle = "Rotation")]
@@ -1036,10 +1043,11 @@ pub struct MemberGroup {
 pub fn member_groups(kind: &crate::FeatureKind) -> Vec<MemberGroup> {
     match kind {
         crate::FeatureKind::FrameMember { groups, .. } if !groups.is_empty() => groups.clone(),
-        crate::FeatureKind::FrameMember { lines, anchor, locate, angle, mirror, body_name, .. } => vec![MemberGroup {
+        crate::FeatureKind::FrameMember { lines, anchor, locate, point, angle, mirror, body_name, .. } => vec![MemberGroup {
             lines: lines.clone(),
             anchor: *anchor,
             locate: *locate,
+            point: point.clone(),
             angle: angle.clone(),
             mirror: *mirror,
             body_name: body_name.clone(),
@@ -1134,11 +1142,12 @@ pub(crate) fn group_features(f: &crate::Feature) -> crate::Result<Option<Vec<cra
             .iter()
             .map(|group| {
                 let mut flat = f.clone();
-                if let crate::FeatureKind::FrameMember { groups, lines, anchor, locate, angle, mirror, body_name, .. } = &mut flat.kind {
+                if let crate::FeatureKind::FrameMember { groups, lines, anchor, locate, point, angle, mirror, body_name, .. } = &mut flat.kind {
                     groups.clear();
                     lines.clone_from(&group.lines);
                     *anchor = group.anchor;
                     *locate = group.locate;
+                    *point = group.point.clone();
                     angle.clone_from(&group.angle);
                     *mirror = group.mirror;
                     body_name.clone_from(&group.body_name);

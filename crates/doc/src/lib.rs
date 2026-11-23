@@ -44,6 +44,7 @@ mod format_offsets;
 pub mod frame;
 pub mod frame_corners;
 pub mod frame_layout;
+pub mod frame_library;
 mod frame_multi_trim;
 pub mod gpu_plan;
 mod history_names;

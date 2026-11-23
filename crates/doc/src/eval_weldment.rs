@@ -633,7 +633,7 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
         return Err(DocError::Invalid("not a frame member feature".into()));
     };
     let vals = doc.evaluation_values();
-    let description = super::frame_member::profile_regions(&vals, st, profile).map(|(_, d, _)| d).unwrap_or_else(|_| f.name.clone());
+    let description = super::frame_member::profile_regions(doc, &vals, st, profile).map(|r| r.description).unwrap_or_else(|_| f.name.clone());
     let groups = crate::frame::member_groups(&f.kind);
     let mut out = Vec::new();
     for b in st.bodies.iter().filter(|b| b.feature == f.id) {
