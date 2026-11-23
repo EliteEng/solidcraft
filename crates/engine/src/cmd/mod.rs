@@ -108,6 +108,7 @@ pub use view_navigation::standard_view;
 mod component_link;
 pub use component_link::resolve_design_links;
 mod config;
+mod cut_list;
 mod design_link;
 mod file;
 mod file_library;
@@ -206,6 +207,7 @@ mod tab_views;
 mod view_dxf;
 mod view_navigation;
 mod view_pick;
+mod weldment;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -539,6 +541,8 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(frame::COMMANDS.iter());
     v.extend(frame_end_cap::COMMANDS.iter());
     v.extend(frame_rotate_member::COMMANDS.iter());
+    v.extend(weldment::COMMANDS.iter());
+    v.extend(cut_list::COMMANDS.iter());
     v.extend(component::COMMANDS.iter());
     v.extend(component_link::COMMANDS.iter());
     v.extend(joints::COMMANDS.iter());

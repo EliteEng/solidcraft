@@ -121,6 +121,14 @@ frame_member
 frame_member_sketch
   sketches: [1, 2]
   remap_refs: path_sketch, profile.sketch
+frame_trim
+  remap_bodies: face.body, members[0].body
+frame_trim_tool
+  remap_bodies: members[0].body, tool
+frame_gusset
+  remap_bodies: first.body, second.body
+frame_weld
+  remap_bodies: edges[0].body
 emboss
   sketches: [1]
   remap_refs: sketch

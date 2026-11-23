@@ -119,6 +119,15 @@ frame_member
   moves: pairs[0].b.at[0], pairs[0].b.at[1], pairs[0].b.at[2]
 frame_member_sketch
   profiles: 2 all
+frame_trim
+  moves: face.point[0], face.point[1], face.point[2]
+  face points: [0, 0, 0]
+frame_trim_tool
+frame_gusset
+  moves: first.point[0], first.point[1], first.point[2], second.point[0], second.point[1], second.point[2]
+  face points: [0, 0, 0], [0, 0, 0]
+frame_weld
+  moves: edges[0].point[0], edges[0].point[1], edges[0].point[2]
 emboss
   face points: [5, 5.5, 5.25]
   profiles: 1 all

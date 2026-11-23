@@ -779,8 +779,10 @@ pub const SECTIONS: &[Section] = &[
     Section { tab: "SHEET METAL", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
     // A frame starts from a sketch of its lines; its profile sizes are often parameters.
     Section { tab: "WELDMENTS", panel: "SKETCH", promoted: 1, ids: &["sketch.create"] },
-    Section { tab: "WELDMENTS", panel: "CREATE", promoted: 2, ids: &["frame.member", "frame.end_cap"] },
+    Section { tab: "WELDMENTS", panel: "CREATE", promoted: 4, ids: &["frame.member", "frame.trim", "frame.end_cap", "frame.gusset", "frame.weld"] },
     Section { tab: "WELDMENTS", panel: "MODIFY", promoted: 1, ids: &["frame.rotate_member"] },
+    // What to cut: identical members together, with their lengths and end angles.
+    Section { tab: "WELDMENTS", panel: "INSPECT", promoted: 3, ids: &["frame.cut_list", "frame.export_member_step", "frame.export_member_dxf"] },
     Section { tab: "WELDMENTS", panel: "CONFIGURE", promoted: 2, ids: CONFIGURE },
 ];
 
@@ -894,6 +896,8 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("drawing.view.flat_pattern", "Flat Pattern"),
     ("drawing.view.section.planned", "Section View"),
     ("document.units", "Units"),
+    ("frame.export_member_dxf", "Member DXF"),
+    ("frame.export_member_step", "Member STEP"),
     ("frame.rotate_member", "Rotate"),
     ("inspect.accessibility", "Access"),
     ("inspect.center_of_mass", "Mass Center"),
@@ -941,6 +945,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("timeline.dependents", "Dependents"),
     ("view.apply", "Restore View"),
     ("view.save", "Save View"),
+    ("frame.trim", "Trim"),
 ];
 
 pub fn ribbon_button_label(command: &CommandSpec) -> &str {
@@ -1760,9 +1765,9 @@ mod tests {
     #[test]
     fn weldments_tab_holds_frame_member_and_follows_a_member_body() {
         let specs = solidcraft_engine::command_specs();
-        assert_eq!(panels("WELDMENTS"), ["SKETCH", "CREATE", "MODIFY", "CONFIGURE"]);
+        assert_eq!(panels("WELDMENTS"), ["SKETCH", "CREATE", "MODIFY", "INSPECT", "CONFIGURE"]);
         let (create, n) = layout("WELDMENTS", "CREATE", &specs).unwrap();
-        assert_eq!(create.iter().take(n).map(|c| c.id).collect::<Vec<_>>(), ["frame.member", "frame.end_cap"]);
+        assert_eq!(create.iter().take(n).map(|c| c.id).collect::<Vec<_>>(), ["frame.member", "frame.trim", "frame.end_cap", "frame.gusset"]);
         assert!(!panel_ids("MODEL", &specs).contains(&"frame.member"), "Frame Member's home is Weldments");
 
         let mut h = crate::scenario::Harness::new();

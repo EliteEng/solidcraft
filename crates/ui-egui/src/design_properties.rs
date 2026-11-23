@@ -426,6 +426,9 @@ pub fn show_object(app: &mut SolveApp, ctx: &egui::Context) {
         rows.push(("", solidcraft_ui_text::tr_label("Open surface — no volume").to_string()));
     } else {
         rows.push(("Mass", format!("{:.3} g", number(total, "mass_g"))));
+        if let Some(w) = total.get("weld_mass_g").and_then(Value::as_f64) {
+            rows.push(("Of which welds", format!("{w:.3} g")));
+        }
         rows.push(("Volume", crate::prefs::show_mm(app, number(total, "volume_mm3"), 3)));
     }
     if skipped > 0 && skipped < bodies.len() as u64 {

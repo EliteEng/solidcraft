@@ -147,6 +147,7 @@ fn same_geometry_inputs(a: &Document, b: &Document) -> bool {
         drawings: _,
         sheet,
         plastic,
+        cut_list: _,
         parts,
         links,
         configs,

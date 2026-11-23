@@ -203,6 +203,21 @@ pub fn draft(b: &Body, faces: &[Vec3], neutral: &solidcore_record::Plane, pull: 
     crate::offset_backend::draft(b, faces, neutral, pull, angle)
 }
 
+/// Body `b` grown by `distance` all round: every face moved that far along its outward normal,
+/// the faces round it extended or trimmed to meet (sharp edges stay sharp), SMLib's offset of
+/// faces. A hole's walls move into it.
+pub fn grown(b: &Body, distance: f64) -> Result<Body> {
+    let _span = solidcraft_profile::span("kernel", "grown");
+    b.require_brep("grow")?;
+    if !(distance.is_finite() && distance > 0.0 && distance <= 1e6) {
+        return Err(KernelError::Invalid("grow distance".into()));
+    }
+    let healed = crate::boolean_record::healed(b)?.with_split_lines(b.splits.clone());
+    let all: Vec<usize> = (0..healed.face_count()).collect();
+    let moved = crate::offset_backend::offset_faces(&healed, &all, distance)?;
+    Ok(crate::record::after(moved, &healed, &crate::record::counts(&[b])))
+}
+
 /// Move the faces at the given points along their outward normals by `distance` (negative: into
 /// the body), SMLib's offset of faces: the faces around them are extended or trimmed to meet them.
 pub fn offset_faces(b: &Body, at: &[Vec3], distance: f64) -> Result<Body> {

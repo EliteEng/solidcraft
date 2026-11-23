@@ -254,6 +254,24 @@ frame_member
     Rotation = frame_member.angle (Angle)
   expressions: 40, 3, 40, frame_member.angle
 frame_member_sketch
+frame_trim
+  inputs:
+    Gap = frame_trim.gap (Length)
+  expressions: frame_trim.gap
+frame_trim_tool
+frame_gusset
+  inputs:
+    Leg 1 = frame_gusset.d1 (Length)
+    Leg 2 = frame_gusset.d2 (Length)
+    Thickness = frame_gusset.thickness (Length)
+    Corner clip = frame_gusset.clip (Length)
+  expressions: frame_gusset.d1, frame_gusset.d2, frame_gusset.thickness, frame_gusset.clip
+frame_weld
+  inputs:
+    Size = frame_weld.size (Length)
+    Stitch length = frame_weld.stitch_length (Length)
+    Stitch pitch = frame_weld.stitch_pitch (Length)
+  expressions: frame_weld.size, frame_weld.stitch_length, frame_weld.stitch_pitch
 emboss
   inputs:
     Depth = emboss.depth (Length)

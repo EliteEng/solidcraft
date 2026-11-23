@@ -139,6 +139,19 @@ pub(super) fn fixtures() -> Vec<(&'static str, Value)> {
             json!({"type": "frame_member", "path_sketch": 1, "profile": {"source": "sketch", "sketch": 2, "profiles": {"type": "all"}},
                 "anchor": "bottom_left", "mirror": true}),
         ),
+        (
+            "frame_trim",
+            json!({"type": "frame_trim", "members": [{"body": "B", "end": "end"}], "face": {"body": "B", "point": o}, "gap": "frame_trim.gap", "extend": true}),
+        ),
+        ("frame_trim_tool", json!({"type": "frame_trim", "members": [{"body": "B", "end": "start"}], "tool": "B"})),
+        (
+            "frame_gusset",
+            json!({"type": "frame_gusset", "first": {"body": "B", "point": o}, "second": {"body": "B", "point": o}, "d1": "frame_gusset.d1", "d2": "frame_gusset.d2", "thickness": "frame_gusset.thickness", "clip": "frame_gusset.clip"}),
+        ),
+        (
+            "frame_weld",
+            json!({"type": "frame_weld", "edges": [{"body": "B", "point": o}], "size": "frame_weld.size", "stitch_length": "frame_weld.stitch_length", "stitch_pitch": "frame_weld.stitch_pitch"}),
+        ),
         ("emboss", json!({"type": "emboss", "sketch": 1, "profiles": {"type": "all"}, "depth": "emboss.depth"})),
         ("rib", json!({"type": "rib", "sketch": 1, "curves": ["l1"], "thickness": "rib.thickness", "depth": "rib.depth"})),
         ("replace_face", json!({"type": "replace_face", "faces": [o], "target": plane("replace_face")})),

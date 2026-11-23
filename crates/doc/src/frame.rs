@@ -354,6 +354,65 @@ pub use crate::eval::frame_member::{
 };
 pub use crate::frame_corners::{CornerOverride, CornerType, MAX_GAP, MemberRef, checked_gap, read_coped};
 
+pub use crate::eval::weldment::{EndCut, MAX_WELD_EDGES, MemberCut, Weld, WeldPiece, member_cuts_report, member_frame, member_line, welds};
+
+/// Which end of a frame member's line a trim works on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrimEndSide {
+    Start,
+    End,
+}
+
+/// One end of a frame member that a trim works on: the member's body and which end of its line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
+pub struct TrimEnd {
+    pub body: crate::BodyName,
+    pub end: TrimEndSide,
+}
+
+/// What the design keeps of its cut list: item numbers and descriptions, each by the item's
+/// grouping key (its section, lengths, end cuts and material), so a member added later takes a
+/// new number and the others keep theirs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CutListSettings {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub numbers: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub descriptions: BTreeMap<String, String>,
+}
+
+impl CutListSettings {
+    pub fn is_empty(&self) -> bool {
+        self.numbers.is_empty() && self.descriptions.is_empty()
+    }
+}
+
+/// An edge a weld runs along: a body and a point on the edge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
+pub struct WeldEdge {
+    pub body: crate::BodyName,
+    pub point: crate::Position,
+}
+
+/// A gusset's shape.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GussetShape {
+    /// A triangle with legs `d1` and `d2` along the two faces.
+    #[default]
+    Triangle,
+    /// A triangle with each tip cut back `chamfer` along its leg, the cut parallel to the other
+    /// face.
+    Chamfered,
+}
+
+impl GussetShape {
+    pub fn is_triangle(&self) -> bool {
+        *self == GussetShape::Triangle
+    }
+}
+
 /// A frame member between two points (#15705): its id, which names the member as a line's id
 /// does (`names`, End Caps), and its two ends, found again on every evaluation so the member
 /// follows them.

@@ -391,6 +391,103 @@ shows ticked when its saved order differs from the order the frame would choose 
 edit that changes which member is longer a row can show ticked, and its saved order still holds. A
 row whose Flip is left alone goes back in its saved order on OK.
 
+## Trim/Extend
+
+**Trim/Extend** (Weldments › Create) trims or lengthens member ends where the corners of one
+feature don't reach: members of different features, a member meeting a plate or the floor, or a
+tube fitted to another body.
+
+- **Member ends**: pick each member on a face near the end to work on.
+- **Boundary**: a plane or a flat face (the ends are cut on its plane, extended past the face), or
+  a body (the ends are coped by it, as a cope corner is: the member keeps the piece its other end
+  is in).
+- **Gap**: how far short of a plane or face each end stops; by a body, how far each end is kept
+  from it all round (the body grown by the gap, its edges kept sharp).
+- **Extend to the boundary** (on by default): an end that stops short of the boundary is
+  lengthened to meet it first. Its old corner cut goes: the end is made again from the line's
+  section, then cut at the boundary.
+
+The members keep their names, and the cut list takes the new ends: a plane gives the end's angle
+and both lengths; a coped end is listed as **cope** and its length measured on the body.
+`frame.trim` `{members: [{body, end?: start|end, near?: [x,y,z]}], plane? | face?: {body, point}
+| tool?: body, gap?, extend?}` does the same; Edit Feature brings the picks back.
+
+## Gussets
+
+**Gusset** (Weldments › Create) adds a plate in the corner between two flat faces of members that
+meet. Pick a face of each member near where the gusset goes.
+
+- The plate lies square to the line where the two faces' planes meet, centred on the picks (moved
+  along that line by **Offset**). Its legs run along the faces: **Leg along first face** and **Leg
+  along second face** (empty: the same as the first). **Thickness** is the plate's.
+- **Shape**: **Triangle**, or **Chamfered**: each tip cut back by **Chamfer** along its leg, the
+  cut parallel to the other face.
+- **Corner clip** cuts the corner back along each leg, clear of the weld.
+
+Faces that are parallel are refused. Each gusset is a body, `Gusset`, `Gusset (2)`…
+`frame.gusset` `{first: {body, point}, second: {body, point}, d1, d2?, thickness, shape?, chamfer?,
+clip?, offset?}` does the same.
+
+## Welds
+
+**Weld** (Weldments › Create) records fillet welds along picked edges: **Leg size**, **Both sides**,
+and a **Stitch length** with its **Stitch pitch** for a stitch weld (stitches from each edge's
+start, one every pitch while a whole one fits; empty: continuous). A weld changes no body: it is
+drawn along its edges as a bead, and the cut list lists the welds by size with the length welded
+and their mass (size² / 2 × the length welded, at the welded member's density), which the total
+mass includes. The design's physical properties (`component.properties`, the Properties window)
+count them as well: their volume and mass are in the totals, `weld_mass_g` (**Of which welds**)
+says how much, and each piece of edge adds its share at its exact centre, so the centre of mass
+and the inertia include them (a straight piece as a thin rod). Each edge is found again from its
+point on the exact edge curves when the model rebuilds; one that is gone fails the feature. `frame.weld` `{edges: [{body, point}], size,
+both_sides?, stitch_length?, stitch_pitch?}` does the same.
+
+## Member exports for tube lasers and beam lines
+
+Under Weldments › Inspect:
+
+- **Export Member STEP**: pick a member; its solid is written on its own, its line along +X from
+  x = 0 (where the member starts, a mitre included), the section's x and y along Y and Z.
+  `frame.export_member_step` `{body, path?}`.
+- **Export Member DXF**: pick the member's **Top face**, then its **Front face** (square to the
+  top). The DXF holds three views, **Top**, **Front** and **Bottom** (looking up at the face
+  opposite the top), stacked bottom to top with the length along X from x = 0, so each face's
+  cuts and holes line up. They are drawn from the body's exact edges, hidden lines worked out
+  exactly, as lines and arcs only: circular arcs exact, any other curve as arcs within 0.001 mm.
+  Layers: VISIBLE, HIDDEN (dashed, with **Hidden edges**), UNCERTAIN (pieces whose visibility
+  couldn't be decided; normally empty) and LABELS (the view names, left of each view).
+  `frame.export_member_dxf` `{body, top: [x,y,z], front: [x,y,z], hidden?, path?}`; it works on
+  any body with two flat faces square to each other.
+
+## Cut list
+
+**Cut List** (Weldments › Inspect) lists what to cut: one item per set of identical members (same
+section, lengths and end cuts, either way round; a mirrored group's members are the other hand), with
+its quantity, the longest and shortest length along the member, the angle of each end cut from
+square, the material and the mass of one piece. Below it, each profile's pieces and total length
+(what to order) and the total mass. Picking an item selects its members; **Export CSV…** and
+**Export JSON…** write the list.
+
+Lengths are measured on each member's body as built, so corners, trims and later cuts are in
+them, from its exact surfaces, not from a mesh: the longest length is the body's exact extent
+along the member's line; each flat end face gives an end cut's angle from square, and the shortest
+length is what a saw marks for a mitre (a mitred 40 mm tube on a 600 mm line is 640 long and 560
+short). An end with short faces that are not flat end cuts (a cope, a notch) is listed as **cope**,
+its shortest length the longest. A mirrored group's members are the other hand. Mass is the body's
+exact volume times its material's density.
+
+Item numbers: until they are kept, items are numbered in list order (by profile, then longest
+first). **Keep Numbers** keeps the numbers shown in the design, by each item's grouping key (its
+section, lengths, end cuts and material), so a member added later takes the next free number and
+the others keep theirs; **Renumber** numbers them again by profile and keeps that. Pick an item to
+give it a **Note** (a part number, a finish, a drawing reference), kept with it in the design and
+shown in the list and the CSV. **List opposite hands together** lists mirror-image pieces (a left
+and a right) as one item, `2 (1 opposite hand)`; **Plates** adds the end caps and gussets with
+their thickness and size, and their mass to the total. The Browser's **Cut List** folder lists the
+items too; a click selects an item's members, a double-click opens the window.
+`frame.cut_list.renumber` `{order?: profile|length|current}` and `frame.cut_list.set` `{item,
+note?}` do the same; `frame.cut_list` takes `opposite_hand` and `plates`.
+
 ## frame.member
 
 - `sketch`: the frame sketch. `lines`: the curve ids to lay members on (2D lines or 3D sketch

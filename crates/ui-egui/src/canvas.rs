@@ -447,6 +447,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
     if app.applying.is_some() {
         return;
     }
+    crate::dialogs_weldment::weld_beads(app, painter, proj);
     let Some(mut d) = app.dialog.take() else { return };
     if matches!(d.kind, Kind::Assembly(_)) {
         crate::dialogs_assembly::overlay(app, painter, proj, &mut d);

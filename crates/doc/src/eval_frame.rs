@@ -2690,7 +2690,7 @@ fn straight(pts: &[Vec3]) -> Option<(Vec3, Vec3)> {
 
 /// The regions of a member's profile, in the profile's own coordinates: one piece of material,
 /// holes and all; and what its members are named after when they have no name of their own.
-fn profile_regions(vals: &BTreeMap<String, Value>, st: &ModelState, profile: &MemberProfile) -> Result<(Vec<Region2>, String, Vec2)> {
+pub(super) fn profile_regions(vals: &BTreeMap<String, Value>, st: &ModelState, profile: &MemberProfile) -> Result<(Vec<Region2>, String, Vec2)> {
     let (regions, description, origin) = match profile {
         MemberProfile::Library { profile } => {
             let p = profile.resolve(|name, e, kind| val(vals, e, kind).map_err(|err| DocError::Invalid(format!("profile `{name}`: {err}"))))?;

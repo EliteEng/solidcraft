@@ -67,6 +67,7 @@ pub mod component;
 pub mod component_link;
 pub mod config;
 pub mod construct;
+pub mod cut_list;
 pub mod delete;
 pub mod diagnostics;
 pub mod drawing;
@@ -180,6 +181,7 @@ pub mod timeline_clipboard;
 pub mod ui_prefs;
 pub mod view_navigation;
 pub mod view_pick;
+pub mod weldment;
 
 pub(crate) use check::read;
 pub use check::{Contract, Issue, ParamCheck, TypedContract, input_schema_for, issues, output_schema_for, run_checked, run_checked_as};
