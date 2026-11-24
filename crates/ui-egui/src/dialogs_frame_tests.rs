@@ -2064,8 +2064,8 @@ fn braced_app() -> SolveApp {
     ])
 }
 
-/// Under Auto, a point where three lines end is a corner to override, saved by all three; under
-/// Mitre the same pick is refused, as stage 1 refuses it.
+/// A point where three lines end is a corner to override, saved by all three, under Auto and under
+/// Mitre alike.
 #[test]
 fn under_auto_a_three_tube_point_is_an_override() {
     let mut app = braced_app();
@@ -2081,13 +2081,14 @@ fn under_auto_a_three_tube_point_is_an_override() {
     assert_eq!(d.inputs[2].items, std::slice::from_ref(&corner), "{:?}", d.error);
     let c = apply_commands(&app, &d).unwrap();
     assert_eq!(c[0].1["corners"], json!([{"members": members, "kind": "auto", "flip": false}]), "{}", c[0].1);
+    // Under any other type too: one override for the whole point.
     let mut d = dialog_on(&mut app, &lines);
     member(&mut d).corner = corner_type("mitre");
     d.active = 2;
-    d.pick(&app.session, corner);
-    assert!(d.inputs[2].items.is_empty());
-    let e = d.error.clone().unwrap_or_default();
-    assert!(e.contains("exactly two members end"), "{e}");
+    d.pick(&app.session, corner.clone());
+    assert_eq!((d.inputs[2].items.as_slice(), d.error.as_deref()), ([corner].as_slice(), None));
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].1["corners"][0]["members"].as_array().map(Vec::len), Some(3), "{}", c[0].1);
 }
 
 /// Under Auto, a corner picked where a point-to-point member ends too is saved with that pair's id, as
@@ -2757,7 +2758,7 @@ fn a_crossing_point_override_is_a_crossing_row_with_flip() {
     d.pick(&h.app.session, x);
     assert!(d.inputs[2].items.is_empty());
     let e = d.error.clone().unwrap_or_default();
-    assert!(e.contains("exactly two members end"), "{e}");
+    assert!(e.contains("two or more members end"), "{e}");
 }
 
 /// Mitre, Butt and Coped frames split crossings as Auto does: on a Mitre frame a sketch point where

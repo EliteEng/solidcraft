@@ -454,8 +454,8 @@ pub struct Fit {
     pub against: Vec<usize>,
     /// The weld gap (mm) of the override of its point or crossing; none: the frame's.
     pub gap: Option<f64>,
-    /// Whether it is fitted to the members' real shape (coped) rather than their outline, as a T-joint's override
-    /// says; none: the frame's Coped.
+    /// A T-joint override's shape: `true` cut to the members' real shape (coped), `false` butted square on the
+    /// rectangle round their section; none: the frame's fit.
     pub coped: Option<bool>,
 }
 

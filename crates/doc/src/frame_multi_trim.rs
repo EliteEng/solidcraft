@@ -73,6 +73,29 @@ pub fn fit_tool(plane: &Plane, regions: &[Region2], start: f64, end: f64, cuts: 
     tool(plane, &squared_outline(regions), start, end, cuts, gap)
 }
 
+/// The rectangle round the whole section, holes dropped: what a butt stops at, the flat face of the section's outside,
+/// whatever its shape (an angle's or a channel's open side included).
+pub fn boxed_outline(regions: &[Region2]) -> Vec<Region2> {
+    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for r in regions {
+        let (a, b) = crate::eval::weldment::outline_box(r);
+        lo = Vec2::new(lo.x.min(a.x), lo.y.min(a.y));
+        hi = Vec2::new(hi.x.max(b.x), hi.y.max(b.y));
+    }
+    if !(lo.x < hi.x && lo.y < hi.y) {
+        return filled_outline(regions);
+    }
+    let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
+    let segs = (0..4).filter_map(|k| Some(Seg2::Line { a: *corners.get(k)?, b: *corners.get((k + 1) % 4)? })).collect();
+    vec![Region2 { outer: Loop2 { segs }, holes: Vec::new() }]
+}
+
+/// [`fit_tool`] of the rectangle round the section ([`boxed_outline`]): what a T-joint's Butt override cuts an end to,
+/// square on the outside of the member it lands on.
+pub fn box_tool(plane: &Plane, regions: &[Region2], start: f64, end: f64, cuts: &[Cut], gap: f64) -> Result<Traced> {
+    tool(plane, &boxed_outline(regions), start, end, cuts, gap)
+}
+
 /// [`fit_tool`] of the tube's real shape ([`filled_outline`]): what a Coped frame (#17854) cuts a tube to.
 pub fn coped_tool(plane: &Plane, regions: &[Region2], start: f64, end: f64, cuts: &[Cut], gap: f64) -> Result<Traced> {
     tool(plane, &filled_outline(regions), start, end, cuts, gap)

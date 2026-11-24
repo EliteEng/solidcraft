@@ -264,8 +264,16 @@ feature's type.
 A **T-joint**, a member ending partway along another, takes an override too: pick the foot of the T.
 It is saved as the member it lands on, then the member ending there. **Butt** fits the end to the
 outside of the member it lands on, **Coped** (or Butt with Coped ticked) to its real shape, **None**
-leaves the end as drawn, and the override's weld gap stands it off. This works under any Corner
-Type, including None and Auto. A mitre needs two ends, so a T-joint refuses Mitre.
+leaves the end as drawn, and the override's weld gap stands it off. On an open section (angle,
+channel) Butt stops square at the outside of the member it lands on, while Coped reaches into its open
+side. This works under any Corner Type, including None and Auto. A mitre needs two ends, so a T-joint
+refuses Mitre.
+
+A point where **three or more members** meet takes one override too, under any Corner Type: pick the
+point. Where they all end there, the first two named make the corner (the first runs through a
+butt) and each other end is fitted to the ones before it, with the override's gap, butted square or
+coped. Where several braces land on one member's middle from different sides, that member is named
+first and every brace end takes the override. None leaves them all as drawn.
 
 A member cut away completely fails with "the member on line `id` was cut away completely", and one
 its corners cut into pieces with "the member on line `id` is cut into pieces by its corners".

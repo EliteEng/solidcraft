@@ -677,7 +677,7 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
     // Each member's name is pinned to its line as the feature is made, so deleting or adding a
     // line later leaves the other members' names alone.
     let (ids, later) = frame::member_parts(&st, &kind).map_err(|e| bad(cmd, e.to_string()))?;
-    if let FeatureKind::FrameMember { corners, path_sketch, .. } = &kind {
+    if let FeatureKind::FrameMember { corners, .. } = &kind {
         let mut pairs = std::collections::HashSet::new();
         for c in corners {
             let lines: Vec<String> = c.lines().map(str::to_string).collect();
@@ -686,11 +686,8 @@ fn member(s: &mut Session, p: &Value) -> Result<Value> {
             sorted.sort();
             sorted.dedup();
             let n = lines.len();
-            // A crossing's override names every line through it, under every type that cuts crossings.
-            let crossing = || path_sketch.is_some_and(|ps| frame::members_cross(&st, ps.0, &lines));
-            if n > 2 && corner != CornerType::Auto && !crossing() {
-                return Err(bad(cmd, "`corners`: an override of three or more members needs `corner` auto"));
-            }
+            // Three or more: a crossing's lines, a point where they all end, or ends landing on the first one's middle,
+            // under any type; the build says when they are none of those.
             if !(2..=frame::MAX_MEMBERS).contains(&n) || sorted.len() != n || !sorted.iter().all(|m| ids.iter().any(|id| id == m)) {
                 return Err(bad(
                     cmd,

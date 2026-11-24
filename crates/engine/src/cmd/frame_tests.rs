@@ -688,13 +688,13 @@ fn a_design_without_fit_ends_saves_without_it() {
 }
 
 #[test]
-fn a_three_tube_override_on_a_mitre_frame_is_refused() {
-    let mut s = Session::default();
-    let ids = three_at_a_point(&mut s);
-    let p = json!({"sketch": "Y", "profile": tube(), "corner": "mitre", "corners": [{"members": ids, "corner": "butt"}]});
-    let e = s.execute("frame.member", &p).unwrap_err().to_string();
-    assert!(e.contains("`corners`"), "{e}");
-    run(&mut s, "frame.member", json!({"sketch": "Y", "profile": tube(), "corner": "auto", "corners": [{"members": ids, "corner": "butt"}]}));
+fn a_three_tube_override_is_taken_on_a_mitre_frame_and_an_auto_one() {
+    for corner in ["mitre", "auto"] {
+        let mut s = Session::default();
+        let ids = three_at_a_point(&mut s);
+        run(&mut s, "frame.member", json!({"sketch": "Y", "profile": tube(), "corner": corner, "corners": [{"members": ids, "corner": "butt"}]}));
+        assert_eq!(bodies(&mut s).len(), 3, "{corner}");
+    }
 }
 
 #[test]
@@ -7152,5 +7152,80 @@ fn a_flat_feature_split_into_groups_keeps_its_names() {
         });
         let name = name.as_ref().unwrap();
         assert_eq!(after[name], before[name], "the rail {name} stayed put");
+    }
+}
+
+/// 50 x 50 x 6 angle, and 60 x 45 channel: open sections, where butting on a member's outside and coping to its
+/// shape differ (a tube's outline is nearly its box, so a tube can't tell them apart).
+fn open_sections() -> [Value; 2] {
+    [
+        json!({"kind": "angle", "width": 50, "height": 50, "thickness": 6}),
+        json!({"kind": "channel", "height": 60, "width": 45, "web": 5, "flange": 6}),
+    ]
+}
+
+/// Lines `lines` (id, from, to) in sketch `Plan`, framed Butt in `profile` with `corners`, each line's body named as its
+/// id in capitals; whether the frame builds and every body measured, and the tubes' overlap.
+fn open_frame(profile: &Value, lines: &[(&str, [f64; 2], [f64; 2])], corners: Value) -> (Vec<Measured>, f64) {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Plan"}));
+    for (id, a, b) in lines {
+        run(&mut s, "sketch.line", json!({"points": [a, b], "ids": [id]}));
+    }
+    run(&mut s, "sketch.finish", json!({}));
+    let names: serde_json::Map<String, Value> = lines.iter().map(|(id, _, _)| (id.to_string(), json!(id.to_uppercase()))).collect();
+    run(&mut s, "frame.member", json!({"sketch": "Plan", "profile": profile, "corner": "butt", "names": names, "corners": corners}));
+    (bodies(&mut s), overlap_all(&mut s))
+}
+
+#[test]
+fn an_open_section_tee_butts_on_the_outside_or_copes_into_the_open_side() {
+    // v ends on h's middle at (200, 0); h's section reaches 25 (angle) or 22.5 (channel) either side of its line.
+    // Butt stops v square on h's outside there (plus a 2 mm gap: 2 further); Coped cuts v to h's real shape, so it
+    // reaches into h's open side, down to h's line. Neither overlaps h.
+    let lines = [("h", [0.0, 0.0], [400.0, 0.0]), ("v", [200.0, 0.0], [200.0, 100.0])];
+    for (profile, half) in open_sections().iter().zip([25.0, 22.5]) {
+        for (corner, lowest) in [
+            (json!({"members": ["h", "v"], "kind": "butt"}), half),
+            (json!({"members": ["h", "v"], "kind": "butt", "gap": "2 mm"}), half + 2.0),
+            (json!({"members": ["h", "v"], "kind": "butt", "coped": true}), 0.0),
+        ] {
+            let (bs, overlap) = open_frame(profile, &lines, json!([corner]));
+            let v = body_named(&bs, "V");
+            assert!((v.2[1] - lowest).abs() < 1e-3 && overlap < 1e-3, "{} {corner}: v from y = {}, overlap {overlap}", profile["kind"], v.2[1]);
+        }
+    }
+}
+
+#[test]
+fn three_members_at_a_point_take_one_override() {
+    // h1 and h2 end at (200, 0) from either side and v starts there. The override names v first: v and h1 make the
+    // corner with v running through (down past the point to h1's far side), and h2 is butted square on both, each
+    // end 2 mm off v's outside. None leaves all three as drawn, meeting at the point.
+    let lines = [("h1", [0.0, 0.0], [200.0, 0.0]), ("h2", [200.0, 0.0], [400.0, 0.0]), ("v", [200.0, 0.0], [200.0, 100.0])];
+    for (profile, half) in open_sections().iter().zip([25.0, 22.5]) {
+        let corner = json!([{"members": ["v", "h1", "h2"], "kind": "butt", "gap": "2 mm"}]);
+        let (bs, overlap) = open_frame(profile, &lines, corner);
+        let (h1, h2, v) = (body_named(&bs, "H1"), body_named(&bs, "H2"), body_named(&bs, "V"));
+        let what = format!("{}: h1 to x = {}, h2 from x = {}, v from y = {}, overlap {overlap}", profile["kind"], h1.3[0], h2.2[0], v.2[1]);
+        assert!((h1.3[0] - (200.0 - half - 2.0)).abs() < 1e-3 && (h2.2[0] - (200.0 + half + 2.0)).abs() < 1e-3, "{what}");
+        assert!((v.2[1] + half).abs() < 1e-3 && overlap < 1e-3, "{what}");
+        let (bs, _) = open_frame(profile, &lines, json!([{"members": ["v", "h1", "h2"], "kind": "none"}]));
+        let (h1, v) = (body_named(&bs, "H1"), body_named(&bs, "V"));
+        assert!((h1.3[0] - 200.0).abs() < 1e-3 && v.2[1].abs() < 1e-3, "{} none: {h1:?} {v:?}", profile["kind"]);
+    }
+}
+
+#[test]
+fn braces_landing_on_a_rail_from_both_sides_take_one_override() {
+    // v1 and v2 end on h's middle at (200, 0) from above and below: one override, h first, butts both square on h's
+    // outside, 2 mm off.
+    let lines = [("h", [0.0, 0.0], [400.0, 0.0]), ("v1", [200.0, 0.0], [200.0, 100.0]), ("v2", [200.0, 0.0], [200.0, -100.0])];
+    for (profile, half) in open_sections().iter().zip([25.0, 22.5]) {
+        let corner = json!([{"members": ["h", "v1", "v2"], "kind": "butt", "gap": "2 mm"}]);
+        let (bs, overlap) = open_frame(profile, &lines, corner);
+        let (v1, v2) = (body_named(&bs, "V1"), body_named(&bs, "V2"));
+        let what = format!("{}: v1 from y = {}, v2 to y = {}, overlap {overlap}", profile["kind"], v1.2[1], v2.3[1]);
+        assert!((v1.2[1] - (half + 2.0)).abs() < 1e-3 && (v2.3[1] + half + 2.0).abs() < 1e-3 && overlap < 1e-3, "{what}");
     }
 }

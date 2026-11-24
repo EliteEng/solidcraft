@@ -58,7 +58,7 @@ fn member_of_feature(doc: &Document, vals: &BTreeMap<String, Value>, st: &ModelS
 
 /// A box round `region`'s outline: its line ends, arcs' centres give or take their radii and
 /// curves' control points (a curve lies in their hull).
-fn outline_box(region: &Region2) -> (Vec2, Vec2) {
+pub(crate) fn outline_box(region: &Region2) -> (Vec2, Vec2) {
     use solidcore_record::Seg2;
     let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
     let mut add = |p: Vec2| {
