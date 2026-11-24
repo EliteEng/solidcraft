@@ -7181,18 +7181,26 @@ fn open_frame(profile: &Value, lines: &[(&str, [f64; 2], [f64; 2])], corners: Va
 #[test]
 fn an_open_section_tee_butts_on_the_outside_or_copes_into_the_open_side() {
     // v ends on h's middle at (200, 0); h's section reaches 25 (angle) or 22.5 (channel) either side of its line.
-    // Butt stops v square on h's outside there (plus a 2 mm gap: 2 further); Coped cuts v to h's real shape, so it
-    // reaches into h's open side, down to h's line. Neither overlaps h.
+    // Butt stops v square on h's outside there (plus a 2 mm gap: 2 further). Coped, and the frame's own fit with no
+    // override, cut v to h's real shape out to h's far side, so v reaches across h's open side to the face beyond its
+    // line, not stopping at the line. None overlaps h.
     let lines = [("h", [0.0, 0.0], [400.0, 0.0]), ("v", [200.0, 0.0], [200.0, 100.0])];
     for (profile, half) in open_sections().iter().zip([25.0, 22.5]) {
         for (corner, lowest) in [
-            (json!({"members": ["h", "v"], "kind": "butt"}), half),
-            (json!({"members": ["h", "v"], "kind": "butt", "gap": "2 mm"}), half + 2.0),
-            (json!({"members": ["h", "v"], "kind": "butt", "coped": true}), 0.0),
+            (json!({"members": ["h", "v"], "kind": "butt"}), Some(half)),
+            (json!({"members": ["h", "v"], "kind": "butt", "gap": "2 mm"}), Some(half + 2.0)),
+            (json!({"members": ["h", "v"], "kind": "butt", "coped": true}), None),
+            (Value::Null, None),
         ] {
-            let (bs, overlap) = open_frame(profile, &lines, json!([corner]));
+            let corners = if corner.is_null() { json!([]) } else { json!([corner]) };
+            let (bs, overlap) = open_frame(profile, &lines, corners);
             let v = body_named(&bs, "V");
-            assert!((v.2[1] - lowest).abs() < 1e-3 && overlap < 1e-3, "{} {corner}: v from y = {}, overlap {overlap}", profile["kind"], v.2[1]);
+            let what = format!("{} {corner}: v from y = {}, overlap {overlap}", profile["kind"], v.2[1]);
+            match lowest {
+                Some(y) => assert!((v.2[1] - y).abs() < 1e-3 && overlap < 1e-3, "{what}"),
+                None => assert!(v.2[1] < -half / 2.0 && overlap < 1e-3, "{what}"),
+            }
+            eprintln!("{what}");
         }
     }
 }

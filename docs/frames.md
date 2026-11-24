@@ -265,8 +265,8 @@ A **T-joint**, a member ending partway along another, takes an override too: pic
 It is saved as the member it lands on, then the member ending there. **Butt** fits the end to the
 outside of the member it lands on, **Coped** (or Butt with Coped ticked) to its real shape, **None**
 leaves the end as drawn, and the override's weld gap stands it off. On an open section (angle,
-channel) Butt stops square at the outside of the member it lands on, while Coped reaches into its open
-side. This works under any Corner Type, including None and Auto. A mitre needs two ends, so a T-joint
+channel) Butt stops square at the outside of the member it lands on, while Coped (and a T with no
+override) reaches across its open side to the face beyond, its far leg or web. This works under any Corner Type, including None and Auto. A mitre needs two ends, so a T-joint
 refuses Mitre.
 
 A point where **three or more members** meet takes one override too, under any Corner Type: pick the

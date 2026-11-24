@@ -20,8 +20,8 @@ pub fn filled_outline(regions: &[Region2]) -> Vec<Region2> {
     regions.iter().map(|r| Region2 { outer: r.outer.clone(), holes: Vec::new() }).collect()
 }
 
-/// The section's outer outlines with every corner arc that sits between two straight sides replaced by the
-/// corner they meet at; holes dropped. A round section (no straight sides) keeps its arcs.
+/// The section's outer outlines with every outside corner arc that sits between two straight sides replaced by the
+/// corner they meet at (an inside corner's fillet kept); holes dropped. A round section (no straight sides) keeps its arcs.
 pub fn squared_outline(regions: &[Region2]) -> Vec<Region2> {
     regions.iter().map(|r| Region2 { outer: squared(&r.outer), holes: Vec::new() }).collect()
 }
@@ -37,10 +37,17 @@ fn squared(outline: &Loop2) -> Loop2 {
         Some(Seg2::Line { a, b }) => Some((*a, *b)),
         _ => None,
     };
-    // The corner replacing segment k, when it is an arc between two lines that meet near it.
+    // The loop's winding (shoelace over its segments' ends): an outside corner's arc turns the same way, an inside
+    // corner's (an angle's or a channel's root fillet) the other, and only an outside one is squared. Squaring an
+    // inside one would cut into the member's material.
+    let winding: f64 = segs.iter().map(|g| g.start().cross(g.end())).sum();
+    // The corner replacing segment k, when it is an outside corner's arc between two lines that meet near it.
     let corner = |k: usize| {
         let arc = segs.get(k.checked_rem(n)?)?;
-        let Seg2::Arc { radius, .. } = *arc else { return None };
+        let Seg2::Arc { radius, sweep, .. } = *arc else { return None };
+        if sweep * radius.signum() * winding < 0.0 {
+            return None;
+        }
         let at = meet(line(k + n - 1)?, line(k + 1)?)?;
         (at.dist(arc.start()).max(at.dist(arc.end())) <= 2.0 * radius.abs()).then_some(at)
     };
@@ -71,6 +78,21 @@ fn meet((a, b): (Vec2, Vec2), (c, d): (Vec2, Vec2)) -> Option<Vec2> {
 /// that much all round ([`tool`]).
 pub fn fit_tool(plane: &Plane, regions: &[Region2], start: f64, end: f64, cuts: &[Cut], gap: f64) -> Result<Traced> {
     tool(plane, &squared_outline(regions), start, end, cuts, gap)
+}
+
+/// Whether the section is open, like an angle, a channel or a beam: some corner of an outer outline turns inward
+/// (a line meeting the next at an inside corner, or an inside corner's fillet). A tube's or a bar's never does.
+pub fn is_open(regions: &[Region2]) -> bool {
+    regions.iter().any(|r| {
+        let segs = &r.outer.segs;
+        let winding: f64 = segs.iter().map(|g| g.start().cross(g.end())).sum();
+        let inward_arc = segs.iter().any(|g| matches!(*g, Seg2::Arc { radius, sweep, .. } if sweep * radius.signum() * winding < 0.0));
+        let inward_turn = segs.iter().zip(segs.iter().cycle().skip(1)).any(|(g, h)| match (*g, *h) {
+            (Seg2::Line { a, b }, Seg2::Line { a: c, b: d }) => (b - a).cross(d - c) * winding < -1e-9,
+            _ => false,
+        });
+        inward_arc || inward_turn
+    })
 }
 
 /// The rectangle round the whole section, holes dropped: what a butt stops at, the flat face of the section's outside,
