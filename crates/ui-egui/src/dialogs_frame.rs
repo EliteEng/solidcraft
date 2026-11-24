@@ -1367,8 +1367,10 @@ fn member_rows(app: &SolveApp, ui: &mut egui::Ui, m: &mut Member, inputs: &mut [
             enter |= text_row(ui, "ui.frame_category", &mut m.save_category, &category).0;
             form_row(ui, "ui.frame_save_personal", |ui| check(ui, &mut m.save_personal));
         }
-        if crate::ui_kit::row(ui, "", |ui| crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.frame_save_to_library"), crate::ui_kit::Button::Normal))
-            .clicked()
+        if crate::ui_kit::row(ui, "", |ui| {
+            crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.frame_save_to_library"), crate::ui_kit::Button::Normal)
+        })
+        .clicked()
         {
             if m.save_open {
                 m.save_requested = true;

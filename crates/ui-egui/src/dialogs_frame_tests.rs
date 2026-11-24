@@ -1773,8 +1773,8 @@ fn a_picked_corner_point_becomes_an_override() {
     assert_eq!(body_names(&app).len(), 4);
 }
 
-/// A point where no two members end alone (the foot of a T, a point on a line's middle) is not
-/// taken, and the dialog says why.
+/// A point where no member ends (a point on a line's middle) is not taken, and the dialog says why. The foot of a T
+/// is taken: its override is the T-joint's, saved by the line it lands on, then the post.
 #[test]
 fn a_point_that_is_no_corner_is_refused_at_the_pick() {
     let mut app = app_with(&[
@@ -1787,16 +1787,23 @@ fn a_point_that_is_no_corner_is_refused_at_the_pick() {
     let frame = sketch_id(&app, "Frame");
     let lines = frame_lines(&app);
     let mut d = dialog_on(&mut app, &lines);
+    member(&mut d).corner = corner_type("butt");
     d.active = 2;
-    for id in [point_at(&app, 300.0, 0.0), "middle".to_string()] {
-        d.pick(&app.session, Sel::ExternalSketchPoint { sketch: frame, id: id.clone() });
-        assert!(d.inputs[2].items.is_empty(), "{id}");
-        let e = d.error.clone().unwrap_or_default();
-        assert!(e.contains("members end"), "{id}: {e}");
-    }
+    d.pick(&app.session, Sel::ExternalSketchPoint { sketch: frame, id: "middle".to_string() });
+    assert!(d.inputs[2].items.is_empty());
+    let e = d.error.clone().unwrap_or_default();
+    assert!(e.contains("members end"), "{e}");
+    let foot = Sel::ExternalSketchPoint { sketch: frame, id: point_at(&app, 300.0, 0.0) };
+    d.pick(&app.session, foot.clone());
+    assert_eq!((d.inputs[2].items.as_slice(), d.error.as_deref()), ([foot.clone()].as_slice(), None));
+    let rail = lines_at(&app, 0.0, 0.0).into_iter().find(|l| lines_at(&app, 600.0, 0.0).contains(l)).unwrap();
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].1["corners"], json!([{"members": [rail, "post"], "kind": "butt", "flip": false}]), "{}", c[0].1);
     let corner = Sel::ExternalSketchPoint { sketch: frame, id: point_at(&app, 600.0, 400.0) };
     d.pick(&app.session, corner.clone());
-    assert_eq!((d.inputs[2].items.as_slice(), d.error.as_deref()), ([corner].as_slice(), None));
+    assert_eq!((d.inputs[2].items.as_slice(), d.error.as_deref()), ([foot, corner].as_slice(), None));
+    run_all(&mut app, c);
+    assert_eq!(body_names(&app).len(), 5);
 }
 
 /// Edit Feature brings back Corner Type, Flip and each override, the override as the point of its

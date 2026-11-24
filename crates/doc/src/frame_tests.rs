@@ -392,23 +392,23 @@ fn corner_at_point_finds_the_two_lines() {
     let all: &[String] = &[];
     assert_eq!(corner_at_point(&st, sketch, all, "p0", false).unwrap(), s(["a", "d"]));
     assert_eq!(corner_at_point(&st, sketch, all, "p2", false).unwrap(), s(["b", "c"]));
-    // A line's end on another's middle (a T) and a point on a line's middle are no corners.
-    for point in ["t0", "t1", "m"] {
-        let e = corner_at_point(&st, sketch, all, point, false).unwrap_err().to_string();
-        assert!(e.contains("corner"), "{point}: {e}");
-    }
+    // A line's end on another's middle is a T-joint, named by the line it lands on, then the line ending there.
+    assert_eq!(corner_at_point(&st, sketch, all, "t0", false).unwrap(), s(["a", "e"]));
+    assert_eq!(corner_at_point(&st, sketch, all, "t1", true).unwrap(), s(["c", "e"]));
+    // A point on a line's middle is no corner.
+    let e = corner_at_point(&st, sketch, all, "m", false).unwrap_err().to_string();
+    assert!(e.contains("corner"), "m: {e}");
     // Only the lines that are members count: without `d`, `a` ends alone at p0.
     let ab = ["a".to_string(), "b".to_string()];
     assert!(corner_at_point(&st, sketch, &ab, "p0", false).is_err());
     assert_eq!(corner_at_point(&st, sketch, &ab, "p1", false).unwrap(), s(["a", "b"]));
     assert!(corner_at_point(&st, sketch, all, "nowhere", false).is_err());
     assert!(corner_at_point(&st, sketch + 1000, all, "p0", false).is_err());
-    // Auto takes every line ending there, and still no T, no line's middle and no lone end.
+    // Auto takes every line ending there, and a T-joint as above, but no line's middle and no lone end.
     assert_eq!(corner_at_point(&st, sketch, all, "p0", true).unwrap(), s(["a", "d"]));
-    for point in ["t0", "t1", "m"] {
-        let e = corner_at_point(&st, sketch, all, point, true).unwrap_err().to_string();
-        assert!(e.contains("two or more members end"), "{point}: {e}");
-    }
+    assert_eq!(corner_at_point(&st, sketch, all, "t0", true).unwrap(), s(["a", "e"]));
+    let e = corner_at_point(&st, sketch, all, "m", true).unwrap_err().to_string();
+    assert!(e.contains("two or more members end"), "m: {e}");
     assert!(corner_at_point(&st, sketch, &ab, "p0", true).is_err());
 }
 

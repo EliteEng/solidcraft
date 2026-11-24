@@ -622,6 +622,8 @@ fn corner_ends(
     // A crossing's override (its Flip used by the crossing plan) names no corner, nor does an overlap's.
     let crossing_override = |k: usize| crossing.is_some_and(|p| p.crossing_overrides.contains(&k));
     let named = |(k, _): &(usize, &Override)| !crossing_override(*k) && !overlaps.contains(k);
+    // The T-joints overrides name: an end of one member on another's middle.
+    let mut tees = Vec::new();
     for o in overrides.iter().enumerate().filter(named).map(|(_, o)| o) {
         // Two members: the corner they meet at. Three or more are an Auto frame's alone (which never comes here).
         let [a, b] = o.members.as_slice() else {
@@ -630,7 +632,11 @@ fn corner_ends(
             }
             return Err(DocError::Invalid("A corner override is not at a corner of the frame".into()));
         };
-        let k = at.get(&pair(a, b)).ok_or_else(|| DocError::Invalid("A corner override is not at a corner of the frame".into()))?;
+        let Some(k) = at.get(&pair(a, b)) else {
+            let tee = tee_of(segments, &|m| line(m).to_string(), a, b);
+            tees.push((tee.ok_or_else(|| DocError::Invalid("A corner override is not at a corner of the frame".into()))?, o));
+            continue;
+        };
         if let Some(f) = finishes.get_mut(*k) {
             // An Auto override on a frame that isn't Auto is the frame's own type, with its own Flip.
             // Its own Coped, else the frame's.
@@ -645,7 +651,10 @@ fn corner_ends(
         add_corner(&mut out, c, kind.flips(), cuts, segments, regions, placed, gap)?;
     }
     // None leaves every point as it is. No override names a point of three or more ends (Auto's alone).
-    let (crowded, fits) = if finish.0.is_none() { (Vec::new(), Vec::new()) } else { stage_fits(segments, planes, drawn, crossing) };
+    let (crowded, mut fits) = if finish.0.is_none() { (Vec::new(), Vec::new()) } else { stage_fits(segments, planes, drawn, crossing) };
+    for (tee, o) in tees {
+        put_tee(&mut fits, tee, o)?;
+    }
     for c in &crowded {
         let cuts = frame_corners::corner_cuts(finish.0, finish.1, finish.2, c, segments, &length, placed, regions, sketch_x, drawn)?;
         add_corner(&mut out, c, finish.0.flips(), cuts, segments, regions, placed, finish.2)?;
@@ -687,7 +696,7 @@ fn crowded(segments: &[(String, Vec3, Vec3)], planes: &[MemberPlane], drawn: &[u
         pair.sort_unstable();
         corners.push(Corner { point, ends: pair });
         for (j, e) in rest.iter().enumerate() {
-            fits.push(Fit { member: e.0, at_start: e.1, against: ends.iter().take(j + 2).map(|e| e.0).collect(), gap: None });
+            fits.push(Fit { member: e.0, at_start: e.1, against: ends.iter().take(j + 2).map(|e| e.0).collect(), gap: None, coped: None });
         }
     }
     fits.sort_by_key(|f| place(f.member));
@@ -748,7 +757,7 @@ fn tees(
             against.extend(ends.iter().filter(|e| e.0 != m && e.2.dist(p) <= tol && place(e.0) < place(m)).map(|e| e.0));
             against.sort_by_key(|&k| place(k));
             against.dedup();
-            Fit { member: m, at_start, against, gap: None }
+            Fit { member: m, at_start, against, gap: None, coped: None }
         })
         .collect()
 }
@@ -942,10 +951,32 @@ fn plans(
     if overrides.iter().any(|o| o.members.len() < 2) {
         return Err(DocError::Invalid("A corner override names at least two members".into()));
     }
-    // An overlap's override names no point of the plan ([`resolve_overlaps`] checks it).
-    let overrides: Vec<Override> = overrides.iter().filter(|o| !overlap_override(segments, planes, o)).cloned().collect();
+    // An overlap's override names no point of the plan ([`resolve_overlaps`] checks it), nor does a T-joint's, which
+    // is put on the plan's fits after.
+    let whole = |m: usize| segments.get(m).map_or_else(String::new, |s| s.0.clone());
+    let tee = |o: &Override| match o.members.as_slice() {
+        [a, b] => tee_of(segments, &whole, a, b),
+        _ => None,
+    };
+    let (tees, overrides): (Vec<Override>, Vec<Override>) =
+        overrides.iter().filter(|o| !overlap_override(segments, planes, o)).cloned().partition(|o| tee(o).is_some());
     // One feature's members share one section.
-    frame_layout::plan(segments, planes, drawn, &|_, _| true, &overrides).map(|p| (Some(p), None))
+    let mut plan = frame_layout::plan(segments, planes, drawn, &|_, _| true, &overrides)?;
+    for o in &tees {
+        let Some((m, at_start, span)) = tee(o) else { continue };
+        // The plan's pieces: the end's piece, and the piece of the line it lands on that holds the end.
+        let Some(end) = segments.get(m).map(|(_, a, b)| if at_start { *a } else { *b }) else { continue };
+        let Some((_, c, d)) = segments.get(span) else { continue };
+        let t = (end - *c).dot(*d - *c) / (*d - *c).dot(*d - *c);
+        let piece = |line: usize, holds: &dyn Fn(&frame_layout::Piece) -> bool| plan.pieces.iter().position(|p| p.parent == line && holds(p));
+        let mine = piece(m, &|p| if at_start { p.from <= 0.0 } else { p.to >= 1.0 });
+        let theirs = piece(span, &|p| p.from <= t && t <= p.to);
+        let (Some(mine), Some(theirs)) = (mine, theirs) else {
+            return Err(DocError::Invalid("A corner override is not at a corner of the frame".into()));
+        };
+        put_tee(&mut plan.fits, (mine, at_start, theirs), o)?;
+    }
+    Ok((Some(plan), None))
 }
 
 /// Whether an end of member i or j lies on the other's line: they meet at a corner, a fit or where a crossing cuts
@@ -954,6 +985,51 @@ fn ends_meet(segments: &[(String, Vec3, Vec3)], i: usize, j: usize) -> bool {
     let tol = frame_corners::CORNER_TOL;
     let (Some((_, a, b)), Some((_, c, d))) = (segments.get(i), segments.get(j)) else { return false };
     a.dist_to_segment(*c, *d) <= tol || b.dist_to_segment(*c, *d) <= tol || c.dist_to_segment(*a, *b) <= tol || d.dist_to_segment(*a, *b) <= tol
+}
+
+/// The T-joint two lines `a` and `b` make among `segments` (each named by its line, `line`): an end of one lying on the
+/// other's middle, as (that member, whether it is its start, the member it lands on). `None` where they make none.
+fn tee_of(segments: &[(String, Vec3, Vec3)], line: &dyn Fn(usize) -> String, a: &str, b: &str) -> Option<(usize, bool, usize)> {
+    let tol = frame_corners::CORNER_TOL;
+    let find = |ending: &str, span: &str| {
+        let ends = (0..segments.len()).filter(|&m| line(m) == ending);
+        let spans: Vec<usize> = (0..segments.len()).filter(|&k| line(k) == span).collect();
+        ends.filter_map(|m| segments.get(m).map(|s| (m, s))).find_map(|(m, (_, p, q))| {
+            [(true, *p), (false, *q)].into_iter().find_map(|(at_start, e)| {
+                let lands =
+                    |k: &usize| segments.get(*k).is_some_and(|(_, c, d)| e.dist_to_segment(*c, *d) <= tol && e.dist(*c) > tol && e.dist(*d) > tol);
+                spans.iter().find(|k| lands(k)).map(|&k| (m, at_start, k))
+            })
+        })
+    };
+    find(a, b).or_else(|| find(b, a))
+}
+
+/// Override `o` put on the T-joint it names (`tee`, [`tee_of`]) among `fits`: None leaves the end as drawn, not fitted;
+/// Butt fits it to the outline of the member it lands on, Coped (or a coped Butt) to its real shape; Auto fits it as
+/// the frame does. Its weld gap is its own. A mitre needs two ends, so a T-joint refuses it.
+fn put_tee(fits: &mut Vec<Fit>, (m, at_start, span): (usize, bool, usize), o: &Override) -> Result<()> {
+    let at = fits.iter().position(|f| f.member == m && f.at_start == at_start);
+    let coped = match o.corner {
+        CornerType::None => {
+            if let Some(k) = at {
+                fits.remove(k);
+            }
+            return Ok(());
+        }
+        CornerType::Mitre => return Err(DocError::Invalid("A T-joint can't be mitred: pick Butt, or None".into())),
+        CornerType::CopedButt => Some(true),
+        CornerType::Butt => Some(o.coped.unwrap_or(false)),
+        CornerType::Auto => o.coped,
+    };
+    match at.and_then(|k| fits.get_mut(k)) {
+        Some(f) => {
+            f.gap = Some(o.gap);
+            f.coped = coped.or(f.coped);
+        }
+        None => fits.push(Fit { member: m, at_start, against: vec![span], gap: Some(o.gap), coped }),
+    }
+    Ok(())
 }
 
 /// Whether override `o` names two of `segments` that no end joins ([`ends_meet`]) and that don't cross in one sketch
@@ -1047,6 +1123,13 @@ fn orders(corner: CornerType, (segments, planes, drawn, sketch_x): Lines, record
             Some([a, b]) => (a.as_str(), b.as_str()),
             _ => continue,
         };
+        // A T-joint: the member it lands on runs through.
+        if o.members.len() == 2
+            && let Some((m, _, span)) = tee_of(segments, &|m| segments.get(m).map_or_else(String::new, |s| s.0.clone()), a, b)
+        {
+            *slot = segments.get(span).zip(segments.get(m)).map(|(t, e)| vec![t.0.clone(), e.0.clone()]);
+            continue;
+        }
         let rest = laid(o.members.get(2..).unwrap_or_default());
         let is_pair = |x: usize, y: usize| (line(x), line(y)) == (a, b) || (line(x), line(y)) == (b, a);
         // The pair with member `first`'s line first, then the rest.
@@ -1473,7 +1556,7 @@ fn auto_ends(
                 let (mut through, _) = cuts(CornerType::Butt)?;
                 through.truncate(1);
                 add_corner(&mut out, &c, true, (through, None), segments, regions, placed, g)?;
-                fits.push(Fit { member: ac.short.0, at_start: ac.short.1, against: vec![ac.long.0], gap: ac.gap });
+                fits.push(Fit { member: ac.short.0, at_start: ac.short.1, against: vec![ac.long.0], gap: ac.gap, coped: None });
             }
             (kind, _) => add_corner(&mut out, &c, kind.flips(), cuts(kind.coped(ac.coped.unwrap_or(coped)))?, segments, regions, placed, g)?,
         }
@@ -1558,12 +1641,14 @@ fn fit_members(
 ) -> Result<()> {
     let no_member = |m: usize| DocError::Invalid(format!("no member {m}"));
     // Each member's tool for each gap, by the gap's bits.
-    let mut tools: HashMap<(usize, u64), kernel::Body> = HashMap::new();
+    let mut tools: HashMap<(usize, u64, bool), kernel::Body> = HashMap::new();
     let gap_of = |f: &Fit| f.gap.unwrap_or(gap);
+    // A T-joint's override may cope it, or fit it to the outline, whatever the frame's Coped.
+    let coped_of = |f: &Fit| f.coped.unwrap_or(coped);
     for f in fits {
         for &t in &f.against {
-            if let std::collections::hash_map::Entry::Vacant(slot) = tools.entry((t, gap_of(f).to_bits())) {
-                slot.insert(member_tool(segments, regions, placed, ends, t, coped, gap_of(f))?.body);
+            if let std::collections::hash_map::Entry::Vacant(slot) = tools.entry((t, gap_of(f).to_bits(), coped_of(f))) {
+                slot.insert(member_tool(segments, regions, placed, ends, t, coped_of(f), gap_of(f))?.body);
             }
         }
     }
@@ -1581,7 +1666,7 @@ fn fit_members(
             .against
             .iter()
             .filter_map(|&t| {
-                let (body, line) = (tools.get(&(t, gap_of(f).to_bits()))?, &segments.get(t)?.0);
+                let (body, line) = (tools.get(&(t, gap_of(f).to_bits(), coped_of(f)))?, &segments.get(t)?.0);
                 let roles = (0..body.face_count()).map(|k| vec![format!("{end_role}:{line}:face:{k}")]).collect();
                 Some(Traced::made(body.clone(), Some(roles)))
             })
@@ -2497,6 +2582,9 @@ pub fn corner_at_point(st: &ModelState, sketch: u64, lines: &[String], point: &s
         crate::construct::sketch_point_position(st, sketch, point).ok_or_else(|| DocError::Unknown(format!("point `{point}` in {}", ss.name)))?;
     let segments = member_lines(ss, lines)?;
     if auto {
+        if let Some(tee) = tee_at(&segments, at) {
+            return Ok(tee);
+        }
         return match ending_and_through(&segments, at) {
             // A crossing, whether or not other lines end there too: the lines crossing name it.
             (_, through) if through.len() >= 2 => Ok(through),
@@ -2507,10 +2595,22 @@ pub fn corner_at_point(st: &ModelState, sketch: u64, lines: &[String], point: &s
     let tol = frame_corners::CORNER_TOL;
     let not_a_corner = || DocError::Invalid("Pick a corner of the frame: a point where exactly two members end".into());
     let corners = frame_corners::find_corners(&segments);
-    let corner = corners.iter().find(|c| c.point.dist(at) <= tol).ok_or_else(not_a_corner)?;
+    let Some(corner) = corners.iter().find(|c| c.point.dist(at) <= tol) else {
+        return tee_at(&segments, at).ok_or_else(not_a_corner);
+    };
     let [(a, _), (b, _)] = corner.ends;
     let id = |m: usize| segments.get(m).map(|s| s.0.clone());
     id(a).zip(id(b)).map(|(a, b)| vec![a, b]).ok_or_else(not_a_corner)
+}
+
+/// The T-joint at `at`: exactly one of `segments` ends there, on exactly one other's middle. Named as an override names
+/// it, the line it lands on first.
+fn tee_at(segments: &[(String, Vec3, Vec3)], at: Vec3) -> Option<Vec<String>> {
+    let (ending, through) = ending_and_through(segments, at);
+    match (ending.as_slice(), through.as_slice()) {
+        ([e], [t]) => Some(vec![t.clone(), e.clone()]),
+        _ => None,
+    }
 }
 
 /// The lines among `segments` that end at `at`, and those that pass through it.
@@ -2556,7 +2656,13 @@ pub fn corner_point(st: &ModelState, sketch: u64, members: &[String]) -> Option<
     let lines = member_lines(ss, members).ok()?;
     let tol = frame_corners::CORNER_TOL;
     let (_, a, b) = lines.first()?;
-    let Some(point) = [*a, *b].into_iter().find(|&p| lines.iter().all(|(_, a, b)| a.dist(p) <= tol || b.dist(p) <= tol)) else {
+    // A T-joint: one of the two ends on the other's middle; its point is that end's.
+    let tee = match members {
+        [x, y] => tee_of(&lines, &|m| lines.get(m).map_or_else(String::new, |s| s.0.clone()), x, y),
+        _ => None,
+    };
+    let tee_end = tee.and_then(|(m, at_start, _)| lines.get(m).map(|(_, a, b)| if at_start { *a } else { *b }));
+    let Some(point) = tee_end.or_else(|| [*a, *b].into_iter().find(|&p| lines.iter().all(|(_, a, b)| a.dist(p) <= tol || b.dist(p) <= tol))) else {
         // ponytail: every point of the sketch is tried; find the lines' crossing first if a large sketch makes edits slow.
         let crossed = |p: &str| {
             crate::construct::sketch_point_position(st, sketch, p)

@@ -1082,6 +1082,39 @@ fn coped_fits_a_tee_to_the_through_tubes_shape() {
 }
 
 #[test]
+fn a_tee_takes_its_own_type_gap_and_cope_from_a_corner_override() {
+    // v ends on h's middle at (200, 0). With no override the frame's Butt fits it flat on h's face at y = 20. An
+    // override on [h, v] sets that one joint: Coped reaches into h's outer radii (y = 14), a 2 mm gap stands it off
+    // to y = 22, and None leaves it as drawn, down to h's line at y = 0. It works under a None frame and an Auto one
+    // too. A mitre needs two ends, so a tee refuses it.
+    let lowest = |frame: &str, corner: Value| {
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Plus"}));
+        run(&mut s, "sketch.line", json!({"points": [[0, 0], [400, 0]], "ids": ["h"]}));
+        run(&mut s, "sketch.line", json!({"points": [[200, 0], [200, 100]], "ids": ["v"]}));
+        run(&mut s, "sketch.finish", json!({}));
+        let mut p = json!({"sketch": "Plus", "profile": tube(), "corner": frame, "names": {"h": "H", "v": "V"}});
+        if !corner.is_null() {
+            p["corners"] = json!([corner]);
+        }
+        let r = s.execute("frame.member", &p);
+        r.map_err(|e| e.to_string()).map(|_| measured(&mut s, "V").2[1])
+    };
+    let near = |got: Result<f64, String>, want: f64, what: &str| {
+        let got = got.unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!((got - want).abs() < 1e-3, "{what}: v reaches down to y = {got}, not {want}");
+    };
+    near(lowest("butt", Value::Null), 20.0, "the frame's butt");
+    near(lowest("butt", json!({"members": ["h", "v"], "kind": "butt", "coped": true})), 14.0, "a coped tee");
+    near(lowest("butt", json!({"members": ["v", "h"], "kind": "butt", "gap": "2 mm"})), 22.0, "a tee with a gap");
+    near(lowest("butt", json!({"members": ["h", "v"], "kind": "none"})), 0.0, "a tee left as drawn");
+    near(lowest("none", json!({"members": ["h", "v"], "kind": "butt"})), 20.0, "a tee on a None frame");
+    near(lowest("auto", json!({"members": ["h", "v"], "kind": "butt", "coped": true})), 14.0, "a coped tee on an Auto frame");
+    let mitre = lowest("butt", json!({"members": ["h", "v"], "kind": "mitre"}));
+    assert!(mitre.as_ref().is_err_and(|e| e.contains("T-joint")), "{mitre:?}");
+}
+
+#[test]
 fn coped_cuts_a_crossing_and_an_overlap_to_the_tubes_shape() {
     // v crosses h and is cut there into `V` and `V · H`, each fitted to h: under Coped to h's real shape, each
     // keeping what lies in h's outer radii, 6 nearer h's line.

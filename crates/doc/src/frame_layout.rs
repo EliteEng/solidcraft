@@ -454,6 +454,9 @@ pub struct Fit {
     pub against: Vec<usize>,
     /// The weld gap (mm) of the override of its point or crossing; none: the frame's.
     pub gap: Option<f64>,
+    /// Whether it is fitted to the members' real shape (coped) rather than their outline, as a T-joint's override
+    /// says; none: the frame's Coped.
+    pub coped: Option<bool>,
 }
 
 /// A corner between two members in no group plane, chained and mitred unless an override says otherwise.
@@ -704,7 +707,7 @@ pub(crate) fn planned(
         against.sort_by_key(|&k| at(k));
         against.dedup();
         if !against.is_empty() {
-            fits.push(Fit { member: e.1, at_start: e.2, against, gap });
+            fits.push(Fit { member: e.1, at_start: e.2, against, gap, coped: None });
         }
     };
     for (n, mut here) in ends {
