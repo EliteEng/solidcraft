@@ -222,14 +222,17 @@ fn cut_plates(s: &Session, st: &solidcraft_doc::ModelState, features: &[u64], al
     let mut out: Vec<CutPlate> = Vec::new();
     for b in &st.bodies {
         let Some(f) = s.doc.feature(b.feature).filter(|f| !f.suppressed) else { continue };
-        let on_member = |m: &str| st.body(m).is_some_and(|mb| features.contains(&mb.feature));
         let (kind, thickness, listed) = match &f.kind {
             // A cap records its members by feature and line.
             FeatureKind::FrameEndCap { thickness, ends, .. } => {
                 ("End cap", thickness, all || ends.iter().any(|e| features.contains(&e.member.feature.0)))
             }
-            FeatureKind::FrameGusset { thickness, first, second, .. } => {
-                ("Gusset", thickness, all || on_member(&first.body.0) || on_member(&second.body.0))
+            // A gusset and a plate record the members they rest on by feature.
+            FeatureKind::FrameGusset { thickness, supports, .. } => {
+                ("Gusset", thickness, all || supports.iter().any(|sp| sp.member.as_ref().is_some_and(|m| features.contains(&m.feature.0))))
+            }
+            FeatureKind::FramePlate { thickness, member, .. } => {
+                ("Plate", thickness, all || member.as_ref().is_some_and(|m| features.contains(&m.feature.0)))
             }
             _ => continue,
         };

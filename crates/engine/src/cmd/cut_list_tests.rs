@@ -142,22 +142,22 @@ fn plates_are_listed_when_asked() {
     let mut s = Session::default();
     rectangle(&mut s);
     run(&mut s, "frame.member", json!({"sketch": "Frame", "profile": tube(), "corner": "mitre"}));
-    let st = s.model.state();
-    let at = |x: f64, y: f64| {
-        st.bodies
-            .iter()
-            .find(|b| b.body.exact_bounds().is_ok_and(|bb| bb.min.x <= x && x <= bb.max.x && bb.min.y <= y && y <= bb.max.y))
-            .unwrap()
-            .name
-            .clone()
+    // A gusset between a post and a rail (boxes away from the frame): the post's side (x = 1020, facing +X) and the
+    // rail's top (z = 40, facing +Z). Asked for plates, the cut list lists every plate.
+    run(&mut s, "solid.box", json!({"corner": [980, -20, 0], "length": 40, "width": 40, "height": 300, "body_name": "Post"}));
+    run(&mut s, "solid.box", json!({"corner": [1020, -20, 0], "length": 300, "width": 40, "height": 40, "body_name": "Rail"}));
+    use solidcraft_geom::prelude::*;
+    let pick = |s: &Session, body: &str, point: [f64; 3], normal: [f64; 3]| {
+        let st = s.model.state();
+        let b = st.body(body).unwrap();
+        let (at, n) = (solidcore_record::Vec3::new(point[0], point[1], point[2]), solidcore_record::Vec3::new(normal[0], normal[1], normal[2]));
+        let i = (0..b.body.face_count())
+            .find(|i| b.body.planar_face(*i).is_some_and(|pl| pl.normal().dot(n) > 0.999 && (pl.origin - at).dot(n).abs() < 1e-6))
+            .unwrap();
+        json!({"body": body, "index": i, "face": point})
     };
-    let (rail, post) = (at(300.0, 0.0), at(600.0, 200.0));
-    drop(st);
-    run(
-        &mut s,
-        "frame.gusset",
-        json!({"first": {"body": rail, "point": [300, 20, 0]}, "second": {"body": post, "point": [580, 200, 0]}, "d1": 100, "thickness": 5}),
-    );
+    let supports = [pick(&s, "Post", [1020.0, 0.0, 150.0], [1.0, 0.0, 0.0]), pick(&s, "Rail", [1100.0, 0.0, 40.0], [0.0, 0.0, 1.0])];
+    run(&mut s, "frame.gusset", json!({"supports": supports, "leg1": 100, "leg2": 100, "thickness": 5}));
     let without = run(&mut s, "frame.cut_list", json!({}));
     assert!(without.get("plates").is_none(), "{without}");
     let with = run(&mut s, "frame.cut_list", json!({"plates": true}));

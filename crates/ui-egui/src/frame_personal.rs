@@ -641,7 +641,8 @@ pub fn folders_ui(app: &mut SolveApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         if app.services.pick_folder.is_some() && button(ui, tr("prefs.frame_folder_add"), Button::Normal).clicked() {
             let base = set.clone();
-            app.pick_folder(move |app, picked| {
+            let current = set.last().cloned().unwrap_or_default();
+            app.pick_folder(&current, move |app, picked| {
                 let Some(picked) = picked else { return };
                 let mut list = base;
                 list.push(picked);
