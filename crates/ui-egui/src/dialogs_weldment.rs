@@ -235,8 +235,54 @@ pub fn run_export(app: &mut SolveApp, k: &Wd, inputs: &[SelInput]) -> Result<(),
         Wd::ExportNc1 => "nc1",
         _ => "dxf",
     };
-    save_export(app, &format!("{body}.{ext}"), ext, k.command(), params);
+    // The member's cut list item number, else (not listed) its name.
+    let item = cut_list_item(app, &body).unwrap_or(body);
+    let name = export_stem(app, &item);
+    save_export(app, &format!("{name}.{ext}"), ext, k.command(), params);
     Ok(())
+}
+
+/// The revision part of an export's file name (`RevA`), from Design Properties' Revision; `None`
+/// while it isn't set. A revision already written as `Rev A` or `rev-a` isn't doubled.
+pub(crate) fn revision_label(app: &SolveApp) -> Option<String> {
+    let rev = app.session.doc.metadata.revision()?.trim();
+    let bare = match rev.get(..3) {
+        Some(head) if head.eq_ignore_ascii_case("rev") => rev[3..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '_' | '.')),
+        _ => rev,
+    };
+    (!bare.is_empty()).then(|| format!("Rev{bare}"))
+}
+
+/// The cut list item number member `body` is listed under, numbered as the Cut List window
+/// numbers it (with its Opposite hand choice while it is open); `None` when it isn't listed.
+pub(crate) fn cut_list_item(app: &mut SolveApp, body: &str) -> Option<String> {
+    let opposite = app.cut_list.as_ref().is_some_and(|c| c.opposite);
+    let list = app.session.execute("frame.cut_list", &json!({"opposite_hand": opposite})).ok()?;
+    let listed = |i: &&Value| i["members"].as_array().is_some_and(|m| m.iter().any(|n| n.as_str() == Some(body)));
+    let item = list["items"].as_array()?.iter().find(listed)?;
+    Some(match &item["item"] {
+        Value::String(s) => s.clone(),
+        v => v.to_string(),
+    })
+}
+
+/// A weldment export's file name without extension: the design's file name, `part` (a member's
+/// cut list item number, or the cut list's `CutList`), then the revision while the design has one,
+/// joined by `_`: `1720-12-0001_1_RevA`. A new revision's files then sit beside the last one's
+/// instead of over them. The Export file name preference, when set, names it instead, as it does
+/// other exports.
+pub(crate) fn export_stem(app: &SolveApp, part: &str) -> String {
+    let design = app.session.path.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|s| s.to_string_lossy().into_owned());
+    let design = design.unwrap_or_else(|| app.session.doc.name.clone());
+    let named = [Some(design), Some(part.to_string()), revision_label(app)]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    let names = crate::export_name::Names { design: &app.session.doc.name, body: Some(&named), source: None, metadata: &app.session.doc.metadata };
+    let safe = crate::export_name::stem("{body}", &names, "member");
+    if app.preferences.export_name.trim().is_empty() { safe } else { crate::export_name::offered(app, Some(part), &safe) }
 }
 
 /// "Save next to the design", remembered for every export and the cut list.

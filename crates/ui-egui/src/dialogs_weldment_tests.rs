@@ -120,8 +120,9 @@ fn a_sketch_is_saved_as_a_weldment_profile_in_its_category_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A member export of a saved design is written next to it without a dialog; with the tick box off,
-/// or for a design never saved, the save dialog asks.
+/// A member export of a saved design is written next to it without a dialog, named with the
+/// design's revision once it has one; with the tick box off, or for a design never saved, the save
+/// dialog asks.
 #[test]
 fn a_member_export_is_written_next_to_a_saved_design() {
     let dir = std::env::temp_dir().join(format!("solidcraft-member-export-{}", std::process::id()));
@@ -144,8 +145,20 @@ fn a_member_export_is_written_next_to_a_saved_design() {
     let design = dir.join("Gate.sc");
     app.session.path = Some(design.to_string_lossy().into_owned());
     run_export(&mut app, &Wd::ExportStep, &d.inputs).unwrap();
-    assert!(dir.join("Rail.step").is_file(), "written beside the design");
+    // Named after the design's file and the member's cut list item.
+    let item = cut_list_item(&mut app, "Rail").unwrap();
+    assert!(!item.is_empty() && item.chars().all(|c| c.is_ascii_digit()), "a number: {item}");
+    assert!(dir.join(format!("Gate_{item}.step")).is_file(), "written beside the design");
     assert_eq!(asked.get(), 1, "without asking");
+
+    // The design's revision goes in the name, so a new revision doesn't write over the last one's.
+    for (rev, label) in [("A", "RevA"), ("Rev B", "RevB"), ("rev-C", "RevC")] {
+        app.run("document.metadata.set", json!({"key": "revision", "value": rev})).unwrap();
+        run_export(&mut app, &Wd::ExportStep, &d.inputs).unwrap();
+        let file = format!("Gate_{item}_{label}.step");
+        assert!(dir.join(&file).is_file(), "{rev}: {file}");
+    }
+    assert!(dir.join(format!("Gate_{item}_RevA.step")).is_file(), "the earlier revision's file is kept");
 
     app.preferences.frame_exports_beside_design = false;
     run_export(&mut app, &Wd::ExportStep, &d.inputs).unwrap();

@@ -256,11 +256,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         app.session.selection = members.iter().filter_map(Value::as_str).map(|name| Sel::Body { name: name.to_string() }).collect();
     }
     if let Some(ext) = export {
-        let stem = app.session.path.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|s| s.to_string_lossy().into_owned());
-        let name = match stem {
-            Some(stem) => format!("{stem} cut list.{ext}"),
-            None => format!("cut-list.{ext}"),
-        };
+        let name = format!("{}.{ext}", crate::dialogs_weldment::export_stem(app, "CutList"));
         crate::dialogs_weldment::save_export(
             app,
             &name,
