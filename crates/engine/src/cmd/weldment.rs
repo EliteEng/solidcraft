@@ -194,7 +194,7 @@ fn moved(s: &solidcore_record::Seg2, v: solidcore_record::Vec2) -> solidcore_rec
 }
 
 fn export_member_dxf(s: &mut Session, p: &Value) -> Result<Value> {
-    use solidcraft_geom::hlr::{Options, Placement, View, Visibility, hidden_lines, prepare};
+    use solidcraft_kernel::hlr::{Options, Placement, View, Visibility, hidden_lines, prepare};
     let cmd = "frame.export_member_dxf";
     let a: ExportMemberDxfParams = crate::schema::weldment::typed(cmd, p)?;
     let st = s.model.state();
