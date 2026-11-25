@@ -27,6 +27,8 @@ pub enum Wd {
     ExportStep,
     /// Export Member DXF: the top and front faces of one member.
     ExportDxf { hidden: bool },
+    /// Export Member NC1: one member.
+    ExportNc1,
     /// Save as Weldment Profile: a sketch's section, and points on it to name.
     SaveProfile(SaveProfile),
 }
@@ -60,13 +62,14 @@ impl Wd {
             Wd::Weld { .. } => "WELD",
             Wd::ExportStep => "EXPORT MEMBER STEP",
             Wd::ExportDxf { .. } => "EXPORT MEMBER DXF",
+            Wd::ExportNc1 => "EXPORT MEMBER NC1",
             Wd::SaveProfile(_) => "SAVE AS WELDMENT PROFILE",
         }
     }
 
     /// OK asks for a file to write, not a feature.
     pub fn saves(&self) -> bool {
-        matches!(self, Wd::ExportStep | Wd::ExportDxf { .. })
+        matches!(self, Wd::ExportStep | Wd::ExportDxf { .. } | Wd::ExportNc1)
     }
 
     pub fn command(&self) -> &'static str {
@@ -76,6 +79,7 @@ impl Wd {
             Wd::Weld { .. } => "frame.weld",
             Wd::ExportStep => "frame.export_member_step",
             Wd::ExportDxf { .. } => "frame.export_member_dxf",
+            Wd::ExportNc1 => "frame.export_member_nc1",
             Wd::SaveProfile(_) => "frame.personal.save",
         }
     }
@@ -161,6 +165,7 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             };
             Some((Kind::Weld(k), gusset_inputs()))
         }
+        "frame.export_member_nc1" => Some((Kind::Weld(Wd::ExportNc1), vec![SelInput::new("Member", BODIES | FACES, false)])),
         "frame.export_member_step" => Some((Kind::Weld(Wd::ExportStep), vec![SelInput::new("Member", BODIES | FACES, false)])),
         "frame.export_member_dxf" => Some((
             Kind::Weld(Wd::ExportDxf { hidden: false }),
@@ -217,6 +222,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Wd, inputs: &[SelInpu
         Wd::ExportStep => {
             crate::ui_kit::status_line(ui, tr("ui.frame_export_step.hint"), crate::ui_kit::StatusTone::Dim);
         }
+        Wd::ExportNc1 => {
+            crate::ui_kit::status_line(ui, tr("ui.frame_export_nc1.hint"), crate::ui_kit::StatusTone::Dim);
+        }
         Wd::ExportDxf { hidden } => {
             crate::ui_kit::status_line(ui, tr("ui.frame_export_dxf.hint"), crate::ui_kit::StatusTone::Dim);
             form_row(ui, "ui.frame_export_hidden", |ui| check(ui, hidden));
@@ -257,7 +265,7 @@ pub fn commands(app: &SolveApp, k: &Wd, inputs: &[SelInput], extra: &Map<String,
             }
             Ok(vec![("frame.gusset".into(), p)])
         }
-        Wd::ExportStep | Wd::ExportDxf { .. } => Ok(vec![(k.command().into(), export_params(k, inputs)?)]),
+        Wd::ExportStep | Wd::ExportDxf { .. } | Wd::ExportNc1 => Ok(vec![(k.command().into(), export_params(k, inputs)?)]),
         Wd::SaveProfile(sp) => Ok(vec![("frame.personal.save".into(), save_profile_params(app, sp, inputs)?)]),
         Wd::Weld { size, both_sides, stitch_length, stitch_pitch } => {
             let edges: Vec<Value> = inputs
@@ -367,7 +375,7 @@ pub fn for_feature(app: &SolveApp, kind: &FeatureKind) -> Option<(Kind, Vec<SelI
 fn export_params(k: &Wd, inputs: &[SelInput]) -> Result<Value, String> {
     let pick = |i: usize| inputs.get(i).and_then(|x| x.items.first());
     match k {
-        Wd::ExportStep => match pick(0) {
+        Wd::ExportStep | Wd::ExportNc1 => match pick(0) {
             Some(Sel::Body { name }) | Some(Sel::Face { body: name, .. }) => Ok(json!({"body": name})),
             _ => Err("pick the member to export".into()),
         },
@@ -386,7 +394,11 @@ fn export_params(k: &Wd, inputs: &[SelInput]) -> Result<Value, String> {
 pub fn run_export(app: &mut SolveApp, k: &Wd, inputs: &[SelInput]) -> Result<(), String> {
     let params = export_params(k, inputs)?;
     let body = params["body"].as_str().unwrap_or("member").to_string();
-    let ext = if matches!(k, Wd::ExportStep) { "step" } else { "dxf" };
+    let ext = match k {
+        Wd::ExportStep => "step",
+        Wd::ExportNc1 => "nc1",
+        _ => "dxf",
+    };
     app.pick_save_command(&format!("{body}.{ext}"), &[ext], k.command(), params);
     Ok(())
 }

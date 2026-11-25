@@ -57,7 +57,10 @@
     "ui.frame_weld_continuous": "continuous",
     "ui.frame_weld_size": "Leg size",
     "ui.frame_weld_stitch_length": "Stitch length",
-    "ui.frame_weld_stitch_pitch": "Stitch pitch"
+    "ui.frame_weld_stitch_pitch": "Stitch pitch",
+    "cmd.frame_export_member_nc1": "Export Member NC1",
+    "help.frame.export_member_nc1": "Writes one frame member as a DSTV NC1 file for a beam line, saw, drill or tube laser: its profile, length, skew cuts, each face's outline and its holes.",
+    "ui.frame_export_nc1.hint": "Pick the member to export. It is written as a DSTV NC1 file, its grade from its material."
   },
   "ar": {
     "First face": "الوجه الأول",
@@ -117,7 +120,10 @@
     "ui.frame_weld_continuous": "متصل",
     "ui.frame_weld_size": "مقاس الضلع",
     "ui.frame_weld_stitch_length": "طول الغرزة",
-    "ui.frame_weld_stitch_pitch": "خطوة الغرزة"
+    "ui.frame_weld_stitch_pitch": "خطوة الغرزة",
+    "cmd.frame_export_member_nc1": "تصدير العضو NC1",
+    "help.frame.export_member_nc1": "يكتب عضو إطار واحدًا كملف DSTV NC1 لخط معالجة الجسور أو المنشار أو المثقاب أو قاطع الأنابيب بالليزر: مقطعه وطوله وقطوعه المائلة ومحيط كل وجه وثقوبه.",
+    "ui.frame_export_nc1.hint": "اختر العضو المراد تصديره. يُكتب كملف DSTV NC1، ودرجته من مادته."
   },
   "de": {
     "First face": "Erste Fläche",
@@ -177,7 +183,10 @@
     "ui.frame_weld_continuous": "durchgehend",
     "ui.frame_weld_size": "Schenkellänge",
     "ui.frame_weld_stitch_length": "Nahtlänge",
-    "ui.frame_weld_stitch_pitch": "Nahtteilung"
+    "ui.frame_weld_stitch_pitch": "Nahtteilung",
+    "cmd.frame_export_member_nc1": "Profil als NC1 exportieren",
+    "help.frame.export_member_nc1": "Schreibt ein Rahmenprofil als DSTV-NC1-Datei für eine Trägerbearbeitungsanlage, Säge, Bohranlage oder einen Rohrlaser: Profil, Länge, Schrägschnitte, die Kontur jeder Fläche und die Bohrungen.",
+    "ui.frame_export_nc1.hint": "Wählen Sie das zu exportierende Profil. Es wird als DSTV-NC1-Datei geschrieben, die Güte aus seinem Werkstoff."
   },
   "he": {
     "First face": "פאה ראשונה",
@@ -237,7 +246,10 @@
     "ui.frame_weld_continuous": "רציף",
     "ui.frame_weld_size": "גודל צלע",
     "ui.frame_weld_stitch_length": "אורך תפר",
-    "ui.frame_weld_stitch_pitch": "מרווח תפרים"
+    "ui.frame_weld_stitch_pitch": "מרווח תפרים",
+    "cmd.frame_export_member_nc1": "ייצוא איבר NC1",
+    "help.frame.export_member_nc1": "כותב איבר מסגרת אחד כקובץ DSTV NC1 לקו עיבוד קורות, מסור, מקדחה או לייזר צינורות: הפרופיל, האורך, החיתוכים המשופעים, קו המתאר של כל פאה והחורים.",
+    "ui.frame_export_nc1.hint": "בחרו את האיבר לייצוא. הוא נכתב כקובץ DSTV NC1, והדרגה נלקחת מהחומר שלו."
   },
   "ja": {
     "First face": "1 つ目の面",
@@ -297,7 +309,10 @@
     "ui.frame_weld_continuous": "連続",
     "ui.frame_weld_size": "脚長",
     "ui.frame_weld_stitch_length": "断続溶接長",
-    "ui.frame_weld_stitch_pitch": "断続溶接ピッチ"
+    "ui.frame_weld_stitch_pitch": "断続溶接ピッチ",
+    "cmd.frame_export_member_nc1": "部材を NC1 で書き出し",
+    "help.frame.export_member_nc1": "フレーム部材 1 本を DSTV NC1 ファイルとして書き出します。形鋼加工ライン、切断機、穴あけ機、パイプレーザー向けで、断面、長さ、斜め切り、各面の外形と穴が入ります。",
+    "ui.frame_export_nc1.hint": "書き出す部材を選びます。DSTV NC1 ファイルとして書き出され、鋼種は材料から取られます。"
   },
   "ko": {
     "First face": "첫 번째 면",
@@ -357,7 +372,10 @@
     "ui.frame_weld_continuous": "연속",
     "ui.frame_weld_size": "각장",
     "ui.frame_weld_stitch_length": "단속 길이",
-    "ui.frame_weld_stitch_pitch": "단속 피치"
+    "ui.frame_weld_stitch_pitch": "단속 피치",
+    "cmd.frame_export_member_nc1": "부재 NC1 내보내기",
+    "help.frame.export_member_nc1": "프레임 부재 하나를 형강 가공 라인, 절단기, 드릴, 튜브 레이저용 DSTV NC1 파일로 씁니다. 단면, 길이, 경사 절단, 각 면의 외곽선과 구멍이 들어갑니다.",
+    "ui.frame_export_nc1.hint": "내보낼 부재를 고르세요. DSTV NC1 파일로 쓰이며, 강종은 재료에서 가져옵니다."
   },
   "vi": {
     "First face": "Mặt thứ nhất",
@@ -417,7 +435,10 @@
     "ui.frame_weld_continuous": "liên tục",
     "ui.frame_weld_size": "Cạnh mối hàn",
     "ui.frame_weld_stitch_length": "Chiều dài đoạn hàn",
-    "ui.frame_weld_stitch_pitch": "Bước đoạn hàn"
+    "ui.frame_weld_stitch_pitch": "Bước đoạn hàn",
+    "cmd.frame_export_member_nc1": "Xuất thanh NC1",
+    "help.frame.export_member_nc1": "Ghi một thanh khung thành tệp DSTV NC1 cho dây chuyền gia công dầm, máy cưa, máy khoan hoặc máy laser ống: tiết diện, chiều dài, vết cắt xiên, đường bao của từng mặt và các lỗ.",
+    "ui.frame_export_nc1.hint": "Chọn thanh cần xuất. Thanh được ghi thành tệp DSTV NC1, mác thép lấy từ vật liệu của nó."
   },
   "zh": {
     "First face": "第一个面",
@@ -477,6 +498,9 @@
     "ui.frame_weld_continuous": "连续",
     "ui.frame_weld_size": "焊脚尺寸",
     "ui.frame_weld_stitch_length": "断续焊长度",
-    "ui.frame_weld_stitch_pitch": "断续焊节距"
+    "ui.frame_weld_stitch_pitch": "断续焊节距",
+    "cmd.frame_export_member_nc1": "导出构件 NC1",
+    "help.frame.export_member_nc1": "将一根框架构件写成 DSTV NC1 文件，用于型钢加工线、锯床、钻床或管材激光切割机：包含截面、长度、斜切角、各面的外形和孔。",
+    "ui.frame_export_nc1.hint": "选择要导出的构件。它会写成 DSTV NC1 文件，钢级取自其材料。"
   }
 }

@@ -1,8 +1,8 @@
 //! Weldment commands that work on frame members after they are made (docs/design/weldments.md):
 //! `frame.trim` trims or extends member ends to a boundary;
 //! `frame.gusset` adds a gusset plate between two faces; `frame.weld` records fillet welds;
-//! `frame.export_member_step` and `frame.export_member_dxf` write one member for a tube laser or a
-//! beam line.
+//! `frame.export_member_step`, `frame.export_member_dxf` and `frame.export_member_nc1` write one
+//! member for a tube laser or a beam line.
 
 use solidcraft_geom::prelude::*;
 
@@ -18,8 +18,8 @@ use super::not_in_sketch;
 use crate::params::bad;
 use crate::schema::features::FeatureResult;
 use crate::schema::weldment::{
-    EndParam, ExportMemberDxfParams, ExportMemberStepParams, GussetParams, GussetShapeParam, MemberExportResult, MemberView, TrimEndParam,
-    TrimParams, WeldParams,
+    EndParam, ExportMemberDxfParams, ExportMemberNc1Params, ExportMemberStepParams, GussetParams, GussetShapeParam, MemberExportResult, MemberView,
+    TrimEndParam, TrimParams, WeldParams,
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
@@ -33,6 +33,7 @@ const GUSSET_CONTRACT: TypedContract<GussetParams> = TypedContract::new();
 const WELD_CONTRACT: TypedContract<WeldParams> = TypedContract::new();
 const STEP_CONTRACT: TypedContract<ExportMemberStepParams> = TypedContract::new();
 const DXF_CONTRACT: TypedContract<ExportMemberDxfParams> = TypedContract::new();
+const NC1_CONTRACT: TypedContract<ExportMemberNc1Params> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("frame.trim", "Trim/Extend", crate::checked!("frame.trim", trim))
@@ -78,6 +79,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&DXF_CONTRACT)
         .output(output_schema_for::<MemberExportResult>)
         .params("body: a body name (a frame member, or any body with flat faces square to each other); top: [x,y,z] on the face the Top view looks at; front: [x,y,z] on the face the Front view looks at (square to the top one); hidden?: bool (hidden edges dashed on layer HIDDEN; default false); path?: .dxf file (else the DXF text is returned). Three views, Top, Front and Bottom (looking up at the face opposite the top), drawn exactly from the body's edges as lines, arcs and ellipse arcs (no mesh) on layer VISIBLE, stacked with the length along X from x = 0 so each face's cuts line up; view names on layer LABELS. Returns path or text, length, views [{view, width, height, at}], uncertain (pieces whose visibility couldn't be decided, on layer UNCERTAIN)"),
+    CommandSpec::new("frame.export_member_nc1", "Export Member NC1", crate::checked!("frame.export_member_nc1", export_member_nc1))
+        .at("WELDMENTS", "INSPECT")
+        .icon("export")
+        .noundo()
+        .doc_only()
+        .contract(&NC1_CONTRACT)
+        .output(output_schema_for::<MemberExportResult>)
+        .params("body: a frame member's body name (made from a built-in section: bar, round bar, tube, angle, channel or I beam); path?: .nc1 file (else the NC1 text is returned); order?, drawing?, phase?: the header's text (default `-`); piece?: the piece mark (default the body name); grade?: the steel grade (default the member's material); quantity?: 1…1000000 (default 1). A DSTV NC1 file for a beam line, saw, drill or tube laser: the header (profile and its code, length, sizes, kg/m, paint area/m, each end's skew cut when it is one flat cut), each face's outline (AK; a round section's outside unrolled on v) taken exactly through the middle of its wall, round holes (BO) and other openings (IK), the piece on the standard's axes (an I beam's web flat, a channel's web down, an angle's heel at the zero point). Returns path or text, length (mm), profile_code, faces, holes, openings"),
 ];
 
 fn trim(s: &mut Session, p: &Value) -> Result<Value> {
@@ -282,7 +291,39 @@ fn export_member_step(s: &mut Session, p: &Value) -> Result<Value> {
     )?;
     let text = crate::kernel::step_export(&[&placed], "SolidCraft")?;
     let (path, text) = written(cmd, a.path, text)?;
-    let out = MemberExportResult { path, text, length: bb.max.x - bb.min.x, views: Vec::new(), uncertain: 0 };
+    let out = MemberExportResult { path, text, length: bb.max.x - bb.min.x, views: Vec::new(), uncertain: 0, ..MemberExportResult::default() };
+    serde_json::to_value(out).map_err(|e| bad(cmd, e.to_string()))
+}
+
+fn export_member_nc1(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "frame.export_member_nc1";
+    let a: ExportMemberNc1Params = crate::schema::weldment::typed(cmd, p)?;
+    let quantity = a.quantity.unwrap_or(1);
+    if !(1..=1_000_000).contains(&quantity) {
+        return Err(bad(cmd, "`quantity` must be 1…1000000"));
+    }
+    let header = frame::Nc1Header {
+        order: a.order.unwrap_or_default(),
+        drawing: a.drawing.unwrap_or_default(),
+        phase: a.phase.unwrap_or_default(),
+        piece: a.piece.unwrap_or_default(),
+        grade: a.grade.unwrap_or_default(),
+        quantity,
+    };
+    let st = s.model.state();
+    let nc = frame::member_nc1(&s.doc, &st, &a.body, &header).map_err(|e| bad(cmd, e.to_string()))?;
+    drop(st);
+    let (path, text) = written(cmd, a.path, nc.text)?;
+    let out = MemberExportResult {
+        path,
+        text,
+        length: nc.length,
+        profile_code: Some(nc.code.to_string()),
+        faces: nc.faces.iter().map(|c| c.to_string()).collect(),
+        holes: nc.holes,
+        openings: nc.openings,
+        ..MemberExportResult::default()
+    };
     serde_json::to_value(out).map_err(|e| bad(cmd, e.to_string()))
 }
 
@@ -393,7 +434,7 @@ fn export_member_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     out_views.reverse();
     let text = solidcraft_io::write_dxf_file(&file).map_err(|e| bad(cmd, e.to_string()))?;
     let (path, text) = written(cmd, a.path, text)?;
-    let out = MemberExportResult { path, text, length, views: out_views, uncertain };
+    let out = MemberExportResult { path, text, length, views: out_views, uncertain, ..MemberExportResult::default() };
     serde_json::to_value(out).map_err(|e| bad(cmd, e.to_string()))
 }
 

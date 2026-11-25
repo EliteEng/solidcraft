@@ -11513,6 +11513,8 @@ pub use model_cache::{PendingChecks, SavedModel};
 pub mod cell_grid;
 #[path = "eval_frame.rs"]
 pub(crate) mod frame_member;
+#[path = "eval_nc1.rs"]
+pub(crate) mod nc1;
 #[path = "eval_release.rs"]
 mod release;
 #[path = "eval_surface.rs"]

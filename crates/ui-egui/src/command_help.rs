@@ -77,6 +77,7 @@ pub const DOCUMENTED: &[&str] = &[
     "frame.cut_list",
     "frame.end_cap",
     "frame.export_member_dxf",
+    "frame.export_member_nc1",
     "frame.export_member_step",
     "frame.gusset",
     "frame.member",

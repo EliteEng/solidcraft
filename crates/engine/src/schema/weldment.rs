@@ -152,6 +152,37 @@ pub struct ExportMemberStepParams {
     pub path: Option<String>,
 }
 
+/// Export one frame member as a DSTV NC1 file for a beam line, saw, drill or tube laser: its
+/// header (profile, length, grade, skew cuts), each face's outline and its holes, read exactly
+/// off the member's body.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportMemberNc1Params {
+    /// The member's body, by name (made from a built-in section).
+    pub body: String,
+    /// The `.nc1` file to write; without it the NC1 text is returned.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The order the piece is for. Default: `-`.
+    #[serde(default)]
+    pub order: Option<String>,
+    /// The drawing the piece is on. Default: `-`.
+    #[serde(default)]
+    pub drawing: Option<String>,
+    /// The phase. Default: `-`.
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// The piece mark. Default: the body's name.
+    #[serde(default)]
+    pub piece: Option<String>,
+    /// The steel grade. Default: the member's material.
+    #[serde(default)]
+    pub grade: Option<String>,
+    /// How many to make (1…1000000). Default: 1.
+    #[serde(default)]
+    pub quantity: Option<u32>,
+}
+
 /// Export one member as a DXF of three views, Top, Front and Bottom, drawn exactly from its edges
 /// (lines and arcs), stacked with its length along X so each face's cuts and holes line up.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -184,7 +215,7 @@ pub struct MemberView {
 }
 
 /// A member export's result.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, JsonSchema)]
 pub struct MemberExportResult {
     /// The file written, with `path`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,6 +231,18 @@ pub struct MemberExportResult {
     /// Pieces of edge whose visibility couldn't be decided, drawn on layer UNCERTAIN.
     #[serde(skip_serializing_if = "is_zero")]
     pub uncertain: usize,
+    /// The NC1 profile code (`I`, `U`, `L`, `M`, `B`, `RO`, `RU`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_code: Option<String>,
+    /// The NC1 faces given an outline (`v`, `o`, `u`, `h`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<String>,
+    /// The NC1 file's round holes.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub holes: usize,
+    /// The NC1 file's other openings, as inner outlines.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub openings: usize,
 }
 
 fn is_zero(n: &usize) -> bool {

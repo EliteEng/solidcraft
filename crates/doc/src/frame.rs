@@ -355,6 +355,7 @@ pub use crate::eval::frame_member::{
 };
 pub use crate::frame_corners::{CornerOverride, CornerType, MAX_GAP, MemberRef, checked_gap, read_coped};
 
+pub use crate::eval::nc1::{Nc1, Nc1Header, member_nc1};
 pub use crate::eval::weldment::{EndCut, MAX_WELD_EDGES, MemberCut, Weld, WeldPiece, member_cuts_report, member_frame, member_line, welds};
 
 /// Which end of a frame member's line a trim works on.

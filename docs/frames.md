@@ -609,6 +609,21 @@ Under Weldments › Inspect:
   couldn't be decided; normally empty) and LABELS (the view names, left of each view).
   `frame.export_member_dxf` `{body, top: [x,y,z], front: [x,y,z], hidden?, path?}`; it works on
   any body with two flat faces square to each other.
+- **Export Member NC1**: pick a member made from a built-in section; it is written as a DSTV NC1
+  file (`.nc1`), the plain-text format beam lines, saws, drills and tube lasers read, following the
+  public DSTV description (7th edition). The header gives the piece mark (the body's name), the
+  steel grade (its material), the profile and its code (`I` beam, `U` channel, `L` angle, `M`
+  rectangular tube, `B` bar or plate, `RO` round tube, `RU` round bar), the length, the section's
+  sizes, kg/m, paint area per metre and each end's skew cut (web in the front view, flange in the
+  bottom view) when that end is one flat cut. The piece lies on the standard's axes: an I beam with
+  its web flat, a channel web down, an angle with one leg flat (`v`) and the other at the zero
+  point (`u`), a rectangular tube with `v` on top, `h` underneath and `o`, `u` at the sides. Each
+  face's outline (`AK`) is cut exactly just inside its outer surface (the outside edge of the material; an I beam's web through its middle) and carried out to the
+  section's full width, so copes, notches and mitres show on the faces they cut; round holes
+  through a wall are `BO` holes, other openings inner outlines (`IK`). A round tube's or bar's
+  outside is unrolled across `v` (the perimeter wide, measured round from the top). Curves are
+  written as points within 0.01 mm. Holes in a round section aren't written yet.
+  `frame.export_member_nc1` `{body, path?, order?, drawing?, phase?, piece?, grade?, quantity?}`.
 
 ## Cut list
 
