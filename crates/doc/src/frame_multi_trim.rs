@@ -37,15 +37,15 @@ fn squared(outline: &Loop2) -> Loop2 {
         Some(Seg2::Line { a, b }) => Some((*a, *b)),
         _ => None,
     };
-    // The loop's winding (shoelace over its segments' ends): an outside corner's arc turns the same way, an inside
-    // corner's (an angle's or a channel's root fillet) the other, and only an outside one is squared. Squaring an
-    // inside one would cut into the member's material.
-    let winding: f64 = segs.iter().map(|g| g.start().cross(g.end())).sum();
+    // Only an outside corner's arc is squared: squaring an inside corner's (an angle's or a channel's root fillet)
+    // would cut into the member's material.
+    let inside = solidcraft_kernel::services::section_corners::inside_corner_arcs(outline);
     // The corner replacing segment k, when it is an outside corner's arc between two lines that meet near it.
     let corner = |k: usize| {
-        let arc = segs.get(k.checked_rem(n)?)?;
-        let Seg2::Arc { radius, sweep, .. } = *arc else { return None };
-        if sweep * radius.signum() * winding < 0.0 {
+        let at = k.checked_rem(n)?;
+        let arc = segs.get(at)?;
+        let Seg2::Arc { radius, .. } = *arc else { return None };
+        if inside.get(at).copied().unwrap_or(false) {
             return None;
         }
         let at = meet(line(k + n - 1)?, line(k + 1)?)?;
@@ -73,26 +73,49 @@ fn meet((a, b): (Vec2, Vec2), (c, d): (Vec2, Vec2)) -> Option<Vec2> {
     Some(a + u * ((c - a).cross(v) / across))
 }
 
+/// Whether the section is open, like an angle, a channel or a beam: some corner of an outer outline turns inward
+/// (a line meeting the next at an inside corner, or an inside corner's fillet). A tube's or a bar's never does.
+pub fn is_open(regions: &[Region2]) -> bool {
+    regions.iter().any(|r| solidcraft_kernel::services::section_corners::is_open(&r.outer))
+}
+
+/// The corners of the rectangle round each of the section's outer outlines (an arc's whole circle's box, a curve's
+/// control points'): what bounds the section, however open.
+pub fn box_corners(regions: &[Region2]) -> Vec<Vec2> {
+    regions
+        .iter()
+        .flat_map(|r| {
+            let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+            let mut add = |p: Vec2| {
+                if p.x.is_finite() && p.y.is_finite() {
+                    lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+                    hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+                }
+            };
+            for g in &r.outer.segs {
+                match *g {
+                    Seg2::Arc { center, radius, .. } => {
+                        let r = radius.abs();
+                        add(Vec2::new(center.x - r, center.y - r));
+                        add(Vec2::new(center.x + r, center.y + r));
+                    }
+                    // A Bézier piece lies inside its control points' hull, so their box bounds it.
+                    Seg2::Line { a, b } => [a, b].into_iter().for_each(&mut add),
+                    Seg2::Cubic { p0, p1, p2, p3 } => [p0, p1, p2, p3].into_iter().for_each(&mut add),
+                    Seg2::Conic { a, apex, b, .. } => [a, apex, b].into_iter().for_each(&mut add),
+                    Seg2::Bezier { n, p } => p.iter().take(usize::from(n) + 1).copied().for_each(&mut add),
+                }
+            }
+            if lo.x > hi.x { Vec::new() } else { vec![lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)] }
+        })
+        .collect()
+}
+
 /// A tube's cutting tool: the squared outline extruded on `plane` from `start` to `end` (as the tube is), then
 /// the same plane cuts as the tube (stage 1 Cut list), traced as a numbered tool. A weld gap `gap` (mm) grows it by
 /// that much all round ([`tool`]).
 pub fn fit_tool(plane: &Plane, regions: &[Region2], start: f64, end: f64, cuts: &[Cut], gap: f64) -> Result<Traced> {
     tool(plane, &squared_outline(regions), start, end, cuts, gap)
-}
-
-/// Whether the section is open, like an angle, a channel or a beam: some corner of an outer outline turns inward
-/// (a line meeting the next at an inside corner, or an inside corner's fillet). A tube's or a bar's never does.
-pub fn is_open(regions: &[Region2]) -> bool {
-    regions.iter().any(|r| {
-        let segs = &r.outer.segs;
-        let winding: f64 = segs.iter().map(|g| g.start().cross(g.end())).sum();
-        let inward_arc = segs.iter().any(|g| matches!(*g, Seg2::Arc { radius, sweep, .. } if sweep * radius.signum() * winding < 0.0));
-        let inward_turn = segs.iter().zip(segs.iter().cycle().skip(1)).any(|(g, h)| match (*g, *h) {
-            (Seg2::Line { a, b }, Seg2::Line { a: c, b: d }) => (b - a).cross(d - c) * winding < -1e-9,
-            _ => false,
-        });
-        inward_arc || inward_turn
-    })
 }
 
 /// The rectangle round the whole section, holes dropped: what a butt stops at, the flat face of the section's outside,
