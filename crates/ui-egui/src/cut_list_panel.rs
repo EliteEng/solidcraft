@@ -145,6 +145,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     let mut change: Option<(&str, Value)> = None;
     let (mut export, mut pick) = (None, None);
+    let mut beside = app.preferences.frame_exports_beside_design;
     let closed = crate::ui_kit::Window::new(egui::Id::unique("sc_cut_list"), "bom", solidcraft_ui_text::tr_label("Cut List")).cards(3.0).show_body(
         ctx,
         |ui| {
@@ -220,6 +221,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.cut_list_opposite_together"), &mut d.opposite);
                 crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.cut_list_plates"), &mut d.plates);
+                crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.frame_export_beside"), &mut beside);
             });
             if let Some(item) = &picked_item {
                 ui.horizontal(|ui| {
@@ -246,6 +248,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             });
         },
     );
+    app.preferences.frame_exports_beside_design = beside;
     if let Some(p) = pick {
         d.picked = p;
         // The item's members become the selection, so the view shows which they are.
@@ -253,9 +256,15 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         app.session.selection = members.iter().filter_map(Value::as_str).map(|name| Sel::Body { name: name.to_string() }).collect();
     }
     if let Some(ext) = export {
-        app.pick_save_command(
-            &format!("cut-list.{ext}"),
-            &[ext],
+        let stem = app.session.path.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|s| s.to_string_lossy().into_owned());
+        let name = match stem {
+            Some(stem) => format!("{stem} cut list.{ext}"),
+            None => format!("cut-list.{ext}"),
+        };
+        crate::dialogs_weldment::save_export(
+            app,
+            &name,
+            ext,
             "frame.cut_list",
             json!({"format": ext, "opposite_hand": d.opposite, "plates": d.plates}),
         );

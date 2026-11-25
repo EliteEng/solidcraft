@@ -32,6 +32,10 @@ macro_rules! unpaged_preferences {
             /// The distance the last new extrude was applied with, in mm (empty until one is); kept when
             /// defaults are restored.
             extrude_last_distance: String = String::new();
+            /// Weldment exports (Export Member STEP, DXF and NC1, and the cut list's CSV and JSON) are
+            /// written next to the open design without asking, once it has been saved. Its tick box is
+            /// in those exports; off, or for a design never saved, the save dialog asks.
+            frame_exports_beside_design: bool = true;
             /// An image (Canvas or Decal) placed on the plane of the sketch being edited gets a
             /// construction rectangle around it in that sketch and follows it, so the sketch's constraints
             /// and dimensions place and size the image (#18405). A mode of the Canvas and Decal tools, set

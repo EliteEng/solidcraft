@@ -128,13 +128,16 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Wd, inputs: &[SelInpu
         Wd::SaveProfile(sp) => enter |= save_profile_rows(app, ui, sp, inputs),
         Wd::ExportStep => {
             crate::ui_kit::status_line(ui, tr("ui.frame_export_step.hint"), crate::ui_kit::StatusTone::Dim);
+            beside_row(app, ui);
         }
         Wd::ExportNc1 => {
             crate::ui_kit::status_line(ui, tr("ui.frame_export_nc1.hint"), crate::ui_kit::StatusTone::Dim);
+            beside_row(app, ui);
         }
         Wd::ExportDxf { hidden } => {
             crate::ui_kit::status_line(ui, tr("ui.frame_export_dxf.hint"), crate::ui_kit::StatusTone::Dim);
             form_row(ui, "ui.frame_export_hidden", |ui| check(ui, hidden));
+            beside_row(app, ui);
         }
         Wd::Weld { size, both_sides, stitch_length, stitch_pitch } => {
             crate::ui_kit::status_line(ui, tr("ui.frame_weld.hint"), crate::ui_kit::StatusTone::Dim);
@@ -232,8 +235,39 @@ pub fn run_export(app: &mut SolveApp, k: &Wd, inputs: &[SelInput]) -> Result<(),
         Wd::ExportNc1 => "nc1",
         _ => "dxf",
     };
-    app.pick_save_command(&format!("{body}.{ext}"), &[ext], k.command(), params);
+    save_export(app, &format!("{body}.{ext}"), ext, k.command(), params);
     Ok(())
+}
+
+/// "Save next to the design", remembered for every export and the cut list.
+pub(crate) fn beside_row(app: &mut SolveApp, ui: &mut egui::Ui) {
+    form_row(ui, "ui.frame_export_beside", |ui| check(ui, &mut app.preferences.frame_exports_beside_design));
+}
+
+/// Where an export goes without asking: `name` in the open design's folder, while "Save next to
+/// the design" is on and the design has been saved to a file. `None`: ask with the save dialog.
+pub(crate) fn beside_design(app: &SolveApp, name: &str) -> Option<String> {
+    if cfg!(target_arch = "wasm32") || !app.preferences.frame_exports_beside_design {
+        return None;
+    }
+    let design = std::path::Path::new(app.session.path.as_deref()?);
+    let folder = design.parent().filter(|f| !f.as_os_str().is_empty())?;
+    Some(folder.join(name).to_string_lossy().into_owned())
+}
+
+/// Write an export (`command` with `params`, and `path`): beside the design ([`beside_design`]),
+/// saying where in the status line, or where the save dialog says.
+pub(crate) fn save_export(app: &mut SolveApp, name: &str, ext: &str, command: &str, params: Value) {
+    let Some(path) = beside_design(app, name) else {
+        app.pick_save_command(name, &[ext], command, params);
+        return;
+    };
+    let mut params = params;
+    params["path"] = json!(path);
+    match app.run(command, params) {
+        Ok(_) => app.set_status(solidcraft_ui_text::format("ui.frame_export_saved", &[("path", &path)]), false),
+        Err(e) => app.set_status(e, true),
+    }
 }
 
 /// The section's sketch and the profiles picked in it (none: its material).

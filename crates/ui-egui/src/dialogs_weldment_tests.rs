@@ -119,3 +119,37 @@ fn a_sketch_is_saved_as_a_weldment_profile_in_its_category_folder() {
     assert_eq!(e.category, ["Steel", "Round"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A member export of a saved design is written next to it without a dialog; with the tick box off,
+/// or for a design never saved, the save dialog asks.
+#[test]
+fn a_member_export_is_written_next_to_a_saved_design() {
+    let dir = std::env::temp_dir().join(format!("solidcraft-member-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = rail_and_post();
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = asked.clone();
+    app.services.pick_save = Some(Box::new(move |_, _| {
+        count.set(count.get() + 1);
+        Box::pin(std::future::ready(None))
+    }));
+    // Never saved: asked.
+    app.start("frame.export_member_step");
+    let mut d = app.dialog.clone().unwrap();
+    d.inputs[0].items = vec![Sel::Body { name: "Rail".into() }];
+    run_export(&mut app, &Wd::ExportStep, &d.inputs).unwrap();
+    app.file_picker = None;
+    assert_eq!(asked.get(), 1);
+
+    let design = dir.join("Gate.sc");
+    app.session.path = Some(design.to_string_lossy().into_owned());
+    run_export(&mut app, &Wd::ExportStep, &d.inputs).unwrap();
+    assert!(dir.join("Rail.step").is_file(), "written beside the design");
+    assert_eq!(asked.get(), 1, "without asking");
+
+    app.preferences.frame_exports_beside_design = false;
+    run_export(&mut app, &Wd::ExportStep, &d.inputs).unwrap();
+    app.file_picker = None;
+    assert_eq!(asked.get(), 2, "the tick box off asks again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
