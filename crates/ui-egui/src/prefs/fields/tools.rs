@@ -35,6 +35,15 @@ macro_rules! tools_preferences {
             /// With `extrude_view_isometric`: when Extrude closes (OK or Cancel) the view goes back to
             /// where it was before it turned (#9176). Off (the default): it stays isometric.
             extrude_view_return: bool = false, PAGE_TOOLS => check_id("prefs.extrude_view_return");
+            /// A new Frame Member's Coped (each butt cut to the other tube's real shape); a member being
+            /// edited keeps its own. Off by default, as before.
+            frame_default_coped: bool = false, PAGE_TOOLS => check_id("prefs.frame_default_coped");
+            /// A new Frame Member's corner type: `auto`, `none` (the default, as before), `mitre` or `butt`;
+            /// a member being edited keeps its own.
+            frame_default_corner: String = "none".into(), PAGE_TOOLS;
+            /// A new Frame Member's Fit ends (free ends fitted to earlier Frame Members); on by default, as
+            /// before.
+            frame_default_fit_ends: bool = true, PAGE_TOOLS => check_id("prefs.frame_default_fit_ends");
             /// A new Solid Fillet opens at the radius the tool ships with, 2 mm, shown in the design's
             /// unit ("0.07874 in" in an inch design): a radius is bound by the faces beside its edges, and
             /// the number read in the design's unit ("2 in" = 50.8 mm) never fits the part (#12418). On: it

@@ -80,6 +80,19 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         });
         ui_kit::settings_section(ui, "frames", app.tr("prefs.frames"), |ui| {
             crate::frame_personal::folders_ui(app, ui);
+            // What a new Frame Member starts with; one being edited keeps its own.
+            ui_kit::text(ui, app.tr("prefs.frame_defaults"), ui_kit::Text::Hint("frame_defaults"));
+            let labels: Vec<&str> = crate::dialogs_frame::CORNER_TYPES.iter().map(|c| c.1).collect();
+            let mut selected = crate::dialogs_frame::CORNER_TYPES.iter().position(|c| c.0 == app.preferences.frame_default_corner).unwrap_or(1);
+            let label = app.tr("prefs.frame_default_corner").to_string();
+            ui_kit::row(ui, &label, |ui| {
+                ui_kit::dropdown(ui, "pref_frame_default_corner", &mut selected, &labels);
+            });
+            if let Some((name, _)) = crate::dialogs_frame::CORNER_TYPES.get(selected) {
+                app.preferences.frame_default_corner = (*name).to_string();
+            }
+            setting::frame_default_fit_ends(app, ui);
+            setting::frame_default_coped(app, ui);
         });
         ui_kit::settings_section(ui, "joint_move", app.tr("joint_move.settings"), |ui| {
             tool_group(ui, "", ui_kit::paint_assembly_move, |ui| {

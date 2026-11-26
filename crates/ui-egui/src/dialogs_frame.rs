@@ -486,6 +486,15 @@ pub(crate) fn draw_tubes(app: &SolveApp, painter: &egui::Painter, proj: &crate::
 }
 
 impl Member {
+    /// A new Frame Member's window: the corner type, Fit ends and Coped Preferences › Tools › Frames
+    /// gives new members (`frame_default_*`); an unknown corner name starts at None.
+    fn with_defaults(p: &crate::prefs::Prefs) -> Member {
+        let mut m = Member::new();
+        m.corner = CORNER_TYPES.iter().position(|c| c.0 == p.frame_default_corner).unwrap_or(NONE);
+        (m.fit_ends, m.coped) = (p.frame_default_fit_ends, p.frame_default_coped);
+        m
+    }
+
     fn new() -> Member {
         let dims = frame::profile_kinds()
             .iter()
@@ -664,7 +673,7 @@ const NEEDS_PARTNER: &str = "A point needs another point after it";
 const PICK_SECOND: &str = "Pick the second point";
 
 /// The dialog for Frame Member or Trim/Extend.
-pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
+pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     if id == "frame.trim" {
         return Some((
             Kind::FrameTrim(Trim::default()),
@@ -680,7 +689,7 @@ pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
             // sketch's instead).
             SelInput::new("Corner Overrides", EXTERNAL_POINTS, true),
         ];
-        (Kind::Frame(Member::new()), inputs)
+        (Kind::Frame(Member::with_defaults(&app.preferences)), inputs)
     })
 }
 

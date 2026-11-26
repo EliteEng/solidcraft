@@ -3538,3 +3538,29 @@ fn mounting_plate_dialog_requires_a_face_and_whole_hole_count() {
     plate.count = "4.5".into();
     assert!(apply_commands(&app, &dialog).unwrap_err().contains("whole number"));
 }
+
+/// Preferences › Tools › Frames sets what a new Frame Member starts with (Auto, Fit ends, Coped here); OK builds the
+/// member with them, and Edit Feature shows the member's own, not the preferences'.
+#[test]
+fn a_new_member_starts_with_the_preferred_corner_fit_and_cope() {
+    let mut app = frame_app();
+    let plain = dialog_on(&mut app, &[]);
+    let Kind::Frame(m) = &plain.kind else { panic!() };
+    assert_eq!((corner_name(m.corner), m.fit_ends, m.coped), ("none", true, false), "as before by default");
+    app.dialog = None;
+    (app.preferences.frame_default_corner, app.preferences.frame_default_fit_ends, app.preferences.frame_default_coped) = ("auto".into(), true, true);
+    let lines = frame_lines(&app);
+    let d = dialog_on(&mut app, &lines);
+    let Kind::Frame(m) = &d.kind else { panic!() };
+    assert_eq!((corner_name(m.corner), m.fit_ends, m.coped), ("auto", true, true));
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!((c[0].1["corner"].as_str(), c[0].1["coped"].as_bool()), (Some("auto"), Some(true)), "{c:?}");
+    run_all(&mut app, c);
+    app.dialog = None;
+    // Edited, it shows its own: with other preferences now, still Auto and Coped.
+    (app.preferences.frame_default_corner, app.preferences.frame_default_coped) = ("mitre".into(), false);
+    let id = app.session.doc.features.iter().rev().find(|f| matches!(f.kind, FeatureKind::FrameMember { .. })).unwrap().id;
+    let e = edit_dialog(&app, id, None).unwrap();
+    let Kind::Frame(m) = &e.kind else { panic!() };
+    assert_eq!((corner_name(m.corner), m.coped), ("auto", true));
+}
