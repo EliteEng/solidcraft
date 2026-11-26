@@ -274,7 +274,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&DRAG_CONTRACT)
         .output(output_schema_for::<DragResult>)
         .params(
-        "occurrence or path: exact placement; at: [x,y,z] world point on it; point: [x,y,z] where it goes. Moves the placement by \
+        "occurrence or path: exact placement; at: [x,y,z] world point on it; point: [x,y,z] where it goes; axis?: [x,y,z], angle?: radians \
+         (a turn about `at`, before the move). Moves the placement by \
          point - at (with any chain of joints it is in that is joined to nothing grounded) and captures its position; other pending \
          moves stay pending. Shared definitions move in all placements. Grounded parts and parts joints hold to something fixed are refused (joint.reach moves those)",
     ),

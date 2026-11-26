@@ -86,6 +86,10 @@ macro_rules! tools_preferences {
             /// hovering an edge, face or sketch curve shows its centre, middle and end points to snap to. On by default; off, a pick takes only
             /// what is under the pointer, as before.
             snap_points: bool = true, PAGE_TOOLS => check_id("settings.snap_points");
+            /// A right-button drag on a part nothing holds in place turns it about the point grabbed, to
+            /// orient it roughly before it is jointed (#2804's drag, turned). Off: a right-button drag moves
+            /// the camera everywhere, as before.
+            turn_free_parts: bool = true, PAGE_TOOLS => check_id("prefs.turn_free_parts");
         }
     };
 }

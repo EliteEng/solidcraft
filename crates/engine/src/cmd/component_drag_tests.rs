@@ -386,3 +386,24 @@ fn an_unknown_name_or_a_number_that_is_no_occurrence_stays_a_plain_refusal() {
         assert!(e.ends_with(want), "{e}");
     }
 }
+
+/// With `axis` and `angle`, a drag turns the part about the point grabbed before it moves: a quarter turn about Z at
+/// the free cube's corner (20, 0, 0) leaves that corner where it is and swings the cube's origin to (20, -20, 0); a bad
+/// axis or angle is refused and moves nothing.
+#[test]
+fn a_drag_with_an_angle_turns_the_part_about_the_point_grabbed() {
+    let mut s = Session::default();
+    part(&mut s, "Base", [0.0, 0.0, 0.0]);
+    let (_, free) = part(&mut s, "Free", [20.0, 0.0, 0.0]);
+    let quarter = std::f64::consts::FRAC_PI_2;
+    run(&mut s, "occurrence.drag", json!({"occurrence": free, "at": [20, 0, 0], "point": [20, 0, 0], "axis": [0, 0, 1], "angle": quarter}));
+    near(origin(&s, &[free]), [20.0, -20.0, 0.0]);
+    let w = s.occurrence_placement(&[free]).unwrap().world;
+    near([w[0][0], w[0][1], w[0][2]], [0.0, 1.0, 0.0]);
+    for bad in [json!({"axis": [0, 0, 0], "angle": 1.0}), json!({"axis": [0, 0, 1], "angle": "a lot"})] {
+        let mut p = json!({"occurrence": free, "at": [20, 0, 0], "point": [20, 0, 0]});
+        p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(s.execute("occurrence.drag", &p).is_err(), "{p}");
+    }
+    near(origin(&s, &[free]), [20.0, -20.0, 0.0]);
+}

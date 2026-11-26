@@ -5,7 +5,9 @@
 //! fixed moves as one, so its joints stay as they are.
 
 use serde_json::Value;
+use solidcore_record::Vec3;
 use solidcraft_doc::{mat_inverse, mat_mul};
+use solidcraft_geom::prelude::*;
 
 use super::{move_vector, occurrence, occurrence_path, translation, valid_position};
 use crate::params::bad;
@@ -121,7 +123,20 @@ pub(super) fn drag(s: &mut Session, p: &Value) -> Result<Value> {
     let at = move_vector(p, "at", Default::default(), true, cmd)?;
     let point = move_vector(p, "point", Default::default(), true, cmd)?;
     let t = point - at;
-    let world_move = translation(t);
+    // A turn about the point grabbed (`axis`, `angle` in radians), then the move: a free part turned by hand.
+    let angle = match p.get("angle") {
+        None => 0.0,
+        Some(v) => v.as_f64().filter(|a| a.is_finite()).ok_or_else(|| bad(cmd, "`angle` must be a finite number of radians"))?,
+    };
+    let world_move = if angle == 0.0 {
+        translation(t)
+    } else {
+        let axis = move_vector(p, "axis", Vec3::Z, false, cmd)?;
+        if !axis.is_finite() || axis.normalized().is_none() {
+            return Err(bad(cmd, "`axis` must have a finite nonzero length"));
+        }
+        solidcraft_doc::rigid(t, at, axis, angle)
+    };
     let group = s.drag_group(&path).map_err(|e| bad(cmd, e.to_string()))?;
     let dragged = s.occurrence_placement(&path).map_err(|e| bad(cmd, e.to_string()))?;
     let inverse = mat_inverse(&dragged.parent_world).ok_or_else(|| bad(cmd, "parent frame is singular"))?;

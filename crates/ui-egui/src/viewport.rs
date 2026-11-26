@@ -767,6 +767,40 @@ pub(crate) fn scene_pick_slack(app: &SolveApp) -> f64 {
     pick_slack(if b.is_empty() { 100.0 } else { b.diagonal() })
 }
 
+/// A right-button drag on a free part turns it ([`crate::occurrence_drag::start_turn`]), with Preferences › Tools ›
+/// Turn a free part with a right-button drag on, no sketch open and no modifier held; the turn follows the pointer
+/// and ends when the button is let go. A press that is still a click is left to the context menu, and a drag already
+/// moving the camera keeps it.
+fn turn_free_part(app: &mut SolveApp, ui: &egui::Ui, rect: Rect) {
+    let (down, click, origin, now, mods) = ui.input(|i| {
+        (i.pointer.secondary_down(), i.pointer.could_any_button_be_click(), i.pointer.press_origin(), i.pointer.latest_pos(), i.modifiers)
+    });
+    if crate::occurrence_drag::turning(app) {
+        match (down, now) {
+            (true, Some(p)) => crate::occurrence_drag::turn_to(app, &projection(app, rect), p),
+            (true, None) => {}
+            (false, _) => crate::occurrence_drag::end(app),
+        }
+        return;
+    }
+    if !app.preferences.turn_free_parts
+        || !down
+        || click
+        || app.viewport.right_drag
+        || !mods.is_none()
+        || crate::occurrence_drag::active(app)
+        || crate::sketch_view::active_sketch(app).is_some()
+    {
+        return;
+    }
+    if let (Some(a), Some(p)) = (origin, now)
+        && rect.contains(a)
+        && !crate::shell::covered(app, a)
+    {
+        crate::occurrence_drag::start_turn(app, &projection(app, rect), a, p);
+    }
+}
+
 pub fn projection(app: &SolveApp, rect: Rect) -> Proj {
     // Product paint, control-channel world coordinates, navigation and picking share
     // one camera frame. The helper leaves explicit subframes and Design unchanged.
@@ -7998,6 +8032,11 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
     if !flat {
         app.flat_view.fitted = false;
     }
+    // A right-button drag on a free part turns it (`occurrence_drag`), once the press can no longer be a click (the
+    // context menu's), before the camera would take it; it ends when the button is let go.
+    if !flat {
+        turn_free_part(app, ui, rect);
+    }
     let input =
         if flat { crate::dialogs_sheet::navigate(app, ui, rect, &resp) } else { crate::navigation::handle(app, ui, rect, &resp, NavCaps::MODEL) };
     // The face under a still pointer keeps its highlight while the view moves under it
@@ -8957,7 +8996,10 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         crate::joint_drag::end(app);
     }
     // A drag whose release never came (focus lost, a tool or dialog took over) ends where it is.
-    if crate::occurrence_drag::active(app) && (resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down())) {
+    if crate::occurrence_drag::active(app)
+        && !crate::occurrence_drag::turning(app)
+        && (resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()))
+    {
         crate::occurrence_drag::end(app);
     }
     // Pulling a face or profile extrudes it; the release applies.

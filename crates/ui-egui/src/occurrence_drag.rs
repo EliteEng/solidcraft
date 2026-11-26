@@ -4,6 +4,11 @@
 //! pointer in the plane through it that faces the view. Each frame runs `occurrence.drag`; the
 //! whole drag is one undo step, and Escape puts everything back as it was.
 //!
+//! A right-button drag on a free part turns it instead, about the point grabbed (Preferences › Tools
+//! › Turn a free part with a right-button drag): across the view about its up axis, up and down
+//! about its right axis, so a part can be roughly oriented before it is jointed. A right click that
+//! stays a click still opens the context menu.
+//!
 //! Floating chains move together whichever member is grabbed. Parts held
 //! by joints to something fixed go to `joint_drag`; grounded parts and the active component's
 //! own bodies are left to the selection box. Both drags grab the part [`grabbed_face`] finds: a
@@ -35,7 +40,12 @@ pub struct Drag {
     /// The drag's undo step is on top of the history (it went in with the first frame that
     /// moved); the design it holds tells it from a step that replaced it.
     step: Option<Arc<Document>>,
+    /// Turning it (a right-button drag): the pointer where the last turn left it.
+    turn: Option<Pos2>,
 }
+
+/// Radians a turn takes per point of pointer travel (about half a degree).
+const TURN_PER_POINT: f64 = 0.01;
 
 /// The placement a drag on `body` moves: the one on its path just inside the active placement.
 pub(crate) fn placement_of(app: &SolveApp, body: &str) -> Option<Vec<u64>> {
@@ -88,40 +98,74 @@ pub fn start(app: &mut SolveApp, proj: &Proj, p: Pos2) -> bool {
         return false;
     };
     let checkpoint = app.session.execute("edit.checkpoint", &json!({})).ok().and_then(|r| r["checkpoint"].as_u64());
-    app.viewport.occurrence_drag = Some(Drag { path, local, origin: at, normal: proj.ray(p).1, checkpoint, step: None });
+    app.viewport.occurrence_drag = Some(Drag { path, local, origin: at, normal: proj.ray(p).1, checkpoint, step: None, turn: None });
     true
 }
 
-pub fn active(app: &SolveApp) -> bool {
-    app.viewport.occurrence_drag.is_some()
+/// Begin turning the part pressed at `p` (a right-button drag now at `now`) when nothing holds it in
+/// place. True when one began.
+pub fn start_turn(app: &mut SolveApp, proj: &Proj, p: Pos2, now: Pos2) -> bool {
+    if !start(app, proj, p) {
+        return false;
+    }
+    if let Some(d) = app.viewport.occurrence_drag.as_mut() {
+        d.turn = Some(p);
+    }
+    turn_to(app, proj, now);
+    true
 }
 
-/// Bring the grabbed point to the pointer at `p`.
-pub fn to(app: &mut SolveApp, proj: &Proj, p: Pos2) {
+/// Whether a part is being turned (a right-button drag).
+pub fn turning(app: &SolveApp) -> bool {
+    app.viewport.occurrence_drag.as_ref().is_some_and(|d| d.turn.is_some())
+}
+
+/// Turn the part by the pointer's travel since the last turn, to `p`: across the view about the
+/// view's up axis, up and down about its right axis, about the point grabbed.
+pub fn turn_to(app: &mut SolveApp, proj: &Proj, p: Pos2) {
     let Some(d) = app.viewport.occurrence_drag.clone() else { return };
-    // Something else took the drag's undo step (undo pressed mid-drag): the drag ends there.
-    if let Some(doc) = &d.step
-        && !app.session.undo.last().is_some_and(|step| Arc::ptr_eq(&step.doc, doc))
-    {
-        end(app);
+    let Some(last) = d.turn else { return };
+    if !still_ours(app, &d) {
         return;
     }
-    let (o, dir) = proj.ray(p);
-    let facing = dir.dot(d.normal);
-    if facing.abs() < 1e-9 {
+    let travel = p - last;
+    if travel.length() < 0.5 {
         return;
     }
-    let target = o + dir * ((d.origin - o).dot(d.normal) / facing);
     let Ok(placement) = app.session.occurrence_placement(&d.path) else {
         end(app);
         return;
     };
     let at = apply_point(&placement.world, d.local);
-    if !target.is_finite() || !at.is_finite() || target.dist(at) < 1e-9 {
+    let (right, up, _) = proj.cam.basis();
+    let axis = up * f64::from(travel.x) + right * f64::from(travel.y);
+    let angle = f64::from(travel.length()) * TURN_PER_POINT;
+    if !at.is_finite() || !axis.is_finite() || axis.normalized().is_none() {
         return;
     }
-    let params = json!({"path": d.path, "at": [at.x, at.y, at.z], "point": [target.x, target.y, target.z], "continuous": true});
-    // One undo step for the whole drag: the first frame's, kept on top while the others run.
+    if let Some(d) = app.viewport.occurrence_drag.as_mut() {
+        d.turn = Some(p);
+    }
+    let params = json!({"path": d.path, "at": [at.x, at.y, at.z], "point": [at.x, at.y, at.z],
+        "axis": [axis.x, axis.y, axis.z], "angle": angle, "continuous": true});
+    run_step(app, &d, params);
+}
+
+/// Whether the drag's undo step is still on top: something else took it (undo pressed mid-drag) and
+/// the drag ends there.
+fn still_ours(app: &mut SolveApp, d: &Drag) -> bool {
+    if let Some(doc) = &d.step
+        && !app.session.undo.last().is_some_and(|step| Arc::ptr_eq(&step.doc, doc))
+    {
+        end(app);
+        return false;
+    }
+    true
+}
+
+/// Run one frame's `occurrence.drag`, keeping the whole drag one undo step: the first frame's, kept
+/// on top while the others run.
+fn run_step(app: &mut SolveApp, d: &Drag, params: serde_json::Value) {
     let own = if d.step.is_some() { app.session.undo.pop() } else { None };
     let before = app.session.doc.clone();
     let pushed = app.run("occurrence.drag", params).is_ok() && !Arc::ptr_eq(&before, &app.session.doc);
@@ -140,6 +184,35 @@ pub fn to(app: &mut SolveApp, proj: &Proj, p: Pos2) {
         }
         None => {}
     }
+}
+
+pub fn active(app: &SolveApp) -> bool {
+    app.viewport.occurrence_drag.is_some()
+}
+
+/// Bring the grabbed point to the pointer at `p`.
+pub fn to(app: &mut SolveApp, proj: &Proj, p: Pos2) {
+    let Some(d) = app.viewport.occurrence_drag.clone() else { return };
+    // Something else took the drag's undo step (undo pressed mid-drag): the drag ends there.
+    if !still_ours(app, &d) {
+        return;
+    }
+    let (o, dir) = proj.ray(p);
+    let facing = dir.dot(d.normal);
+    if facing.abs() < 1e-9 {
+        return;
+    }
+    let target = o + dir * ((d.origin - o).dot(d.normal) / facing);
+    let Ok(placement) = app.session.occurrence_placement(&d.path) else {
+        end(app);
+        return;
+    };
+    let at = apply_point(&placement.world, d.local);
+    if !target.is_finite() || !at.is_finite() || target.dist(at) < 1e-9 {
+        return;
+    }
+    let params = json!({"path": d.path, "at": [at.x, at.y, at.z], "point": [target.x, target.y, target.z], "continuous": true});
+    run_step(app, &d, params);
 }
 
 /// Let go: the part stays where it was dragged.

@@ -337,3 +337,62 @@ fn r_still_starts_rectangle_with_a_free_part_in_the_design() {
     assert!(matches!(h.app.dialog.as_ref().map(|d| &d.kind), Some(crate::dialogs::Kind::Sketch)), "R starts Rectangle through Create Sketch");
     assert_eq!(h.app.dialog.as_ref().and_then(|d| d.then_start), Some("sketch.rectangle.two_point"));
 }
+
+/// Press with the right button at `a` and move to `b` in 12 frames, holding it there.
+fn right_press_and_move(h: &mut Harness, a: egui::Pos2, b: egui::Pos2) {
+    h.app.synthetic.push(egui::Event::PointerMoved(a));
+    h.app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.app.synthetic.extend((1..=12).map(|k| egui::Event::PointerMoved(a + (b - a) * (k as f32 / 12.0))));
+    play(h);
+}
+
+fn right_release(h: &mut Harness, b: egui::Pos2) {
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: b,
+        button: egui::PointerButton::Secondary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    play(h);
+}
+
+/// The placement's rotation: its matrix's 3 x 3 part.
+fn turn(h: &Harness, path: &[u64]) -> [[f64; 3]; 3] {
+    let w = h.app.session.occurrence_placement(path).expect("placement").world;
+    [[w[0][0], w[0][1], w[0][2]], [w[1][0], w[1][1], w[1][2]], [w[2][0], w[2][1], w[2][2]]]
+}
+
+fn turned_by(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> f64 {
+    a.iter().flatten().zip(b.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+}
+
+/// A right-button drag on a free part turns it about the point grabbed, in one undo step, and the camera stays; on the
+/// grounded part, on empty space, or with the preference off, it moves the camera and the part stays.
+#[test]
+fn a_right_button_drag_turns_a_free_part_and_leaves_the_camera() {
+    let (mut h, base, free) = two_parts();
+    let undo = h.app.session.undo.len();
+    let (still, cam) = (turn(&h, &[free]), h.app.cam);
+    let grab = Vec3::new(25.0, 5.0, 10.0);
+    let (a, b) = (screen(&mut h, grab), screen(&mut h, Vec3::new(55.0, 5.0, 10.0)));
+    right_press_and_move(&mut h, a, b);
+    assert!(crate::occurrence_drag::turning(&h.app), "the right drag turns the part");
+    right_release(&mut h, b);
+    assert!(h.app.viewport.occurrence_drag.is_none());
+    assert!(turned_by(turn(&h, &[free]), still) > 0.1, "it turned: {:?}", turn(&h, &[free]));
+    assert!(h.app.cam.yaw == cam.yaw && h.app.cam.pitch == cam.pitch, "the camera stays");
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step for the turn");
+    assert!(turned_by(turn(&h, &[base]), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]) < 1e-9, "the grounded part stays");
+    run(&mut h, "edit.undo", json!({}));
+    assert!(turned_by(turn(&h, &[free]), still) < 1e-9);
+    // The grounded part, and with the preference off the free one: the camera orbits instead.
+    for (at, off) in [(Vec3::new(0.0, 0.0, 10.0), false), (grab, true)] {
+        h.app.preferences.turn_free_parts = !off;
+        let cam = h.app.cam;
+        let p = screen(&mut h, at);
+        right_press_and_move(&mut h, p, p + egui::vec2(40.0, 0.0));
+        right_release(&mut h, p + egui::vec2(40.0, 0.0));
+        assert!(turned_by(turn(&h, &[free]), still) < 1e-9, "off {off}: the part stays");
+        assert!(h.app.cam.yaw != cam.yaw || h.app.cam.pitch != cam.pitch, "off {off}: the camera orbits");
+    }
+}

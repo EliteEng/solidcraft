@@ -2065,6 +2065,12 @@ pub struct DragKeys {
     /// changes nothing else. Default: `false`.
     #[serde(default)]
     pub continuous: Option<bool>,
+    /// The axis of a turn about `at` before the move, in world coordinates. Default: Z.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<[f64; 3]>,
+    /// The angle of that turn, in radians (a free part turned by hand). Default: 0, no turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
 }
 
 /// `occurrence.drag`'s parameters: [`DragKeys`], read as the handler reads them: `path` stands

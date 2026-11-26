@@ -1,0 +1,20 @@
+{
+  "en": {
+    "prefs.turn_free_parts": "Turn a free part with a right-button drag"
+  },
+  "ar": {
+    "prefs.turn_free_parts": "تدوير جزء حر بالسحب بالزر الأيمن"
+  },
+  "he": {
+    "prefs.turn_free_parts": "סיבוב חלק חופשי בגרירה בלחצן הימני"
+  },
+  "ja": {
+    "prefs.turn_free_parts": "右ボタンのドラッグで自由な部品を回転"
+  },
+  "vi": {
+    "prefs.turn_free_parts": "Xoay chi tiết tự do bằng cách kéo chuột phải"
+  },
+  "zh": {
+    "prefs.turn_free_parts": "右键拖动旋转自由零件"
+  }
+}
