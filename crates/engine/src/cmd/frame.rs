@@ -565,12 +565,24 @@ fn member_groups(s: &Session, cmd: &str, p: &Value) -> Result<Vec<MemberGroup>> 
 /// before OK. An error when the command would refuse the parameters or the member cannot be made.
 pub fn member_section_view(s: &Session, p: &Value) -> Result<frame::SectionView> {
     let cmd = "frame.member";
-    let Parsed { mut kind, .. } = parse_member(s, p)?;
+    let Parsed { mut kind, library, .. } = parse_member(s, p)?;
     // Read as the member is made: in the design's units, shown where the active occurrence is.
     super::features::in_design_units(s, &mut kind);
     let f = feature_in_active(s, cmd, &kind)?;
     let st = s.model.state();
-    frame::section_view(&s.doc, &st, &f, &s.active_component_frame()).map_err(|e| bad(cmd, e.to_string()))
+    // A whole library profile (a personal one) joins the design's library when the member is made: read the section
+    // with it there, as the member will be, or it is a profile the design doesn't have and nothing is shown.
+    let joined;
+    let doc = match library.filter(|lib| *lib != s.doc.frame_profiles) {
+        Some(lib) => {
+            let mut d = (*s.doc).clone();
+            d.frame_profiles = lib;
+            joined = d;
+            &joined
+        }
+        None => &*s.doc,
+    };
+    frame::section_view(doc, &st, &f, &s.active_component_frame()).map_err(|e| bad(cmd, e.to_string()))
 }
 
 /// `kind` as the feature it will be added as: in the active component, whose frame it is laid out in.

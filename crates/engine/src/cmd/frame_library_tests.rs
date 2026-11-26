@@ -447,3 +447,20 @@ fn a_sketch_section_is_saved_as_a_personal_profile_without_changing_the_design()
     assert_eq!((folders["set"].as_bool(), folders["folders"][1]["path"].as_str()), (Some(true), Some("/b")), "{folders}");
     assert!(run(&mut s, "frame.personal.folders", json!({})).get("set").is_none());
 }
+
+#[test]
+fn a_personal_profile_not_yet_in_the_design_shows_its_section_before_the_member_is_made() {
+    // Frame Member passes a personal profile whole (`library`, as frame.personal.list lists it); it joins the design's
+    // library only when the member is made. The section the window shows (its hot points) is read before that, and
+    // must be read with it there too: it was looked for in the design's library alone, failed, and showed nothing.
+    let mut s = Session::default();
+    rail(&mut s);
+    let whole = json!({"name": "150PFC", "category": ["Parallel Flange Channel"], "section": {"source": "built_in",
+        "profile": {"kind": "channel", "height": "150 mm", "width": "75 mm", "web": "6 mm", "flange": "9.5 mm", "root_radius": "10 mm"}}});
+    let p = json!({"sketch": "Rail", "library": whole});
+    let view = crate::cmd::member_section_view(&s, &p).expect("the section is shown before the member is made");
+    assert_eq!(view.regions.len(), 1, "the channel's one section");
+    assert!(s.doc.frame_profiles.is_empty(), "reading it leaves the design's library alone");
+    run(&mut s, "frame.member", p);
+    assert_eq!(s.doc.frame_profiles.len(), 1, "making the member adds it");
+}
