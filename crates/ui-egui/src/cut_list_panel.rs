@@ -218,7 +218,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Some(e) = &d.error {
                 ui.label(RichText::new(e).color(t.error));
             }
-            ui.horizontal(|ui| {
+            // Wrapped, so the window keeps its width however long the labels are.
+            ui.horizontal_wrapped(|ui| {
                 crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.cut_list_opposite_together"), &mut d.opposite);
                 crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.cut_list_plates"), &mut d.plates);
                 crate::ui_kit::checkbox(ui, solidcraft_ui_text::tr("ui.frame_export_beside"), &mut beside);
@@ -226,8 +227,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
             if let Some(item) = &picked_item {
                 ui.horizontal(|ui| {
                     ui.label(format!("{} {}", solidcraft_ui_text::tr("ui.cut_list_note_for"), item["item"]));
-                    ui.add(egui::TextEdit::singleline(&mut d.note).desired_width(220.0));
-                    if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.cut_list_save_note"), crate::ui_kit::Button::Small).clicked() {
+                    // Enter in the note saves it, as the button does.
+                    let (entered, _) = crate::ui_kit::text_field(ui, &mut d.note, "");
+                    if crate::ui_kit::button(ui, solidcraft_ui_text::tr("ui.cut_list_save_note"), crate::ui_kit::Button::Small).clicked() || entered {
                         change = Some(("frame.cut_list.set", json!({"item": item["item"], "note": d.note, "opposite_hand": d.opposite})));
                     }
                 });
