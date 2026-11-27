@@ -183,8 +183,16 @@ fn layout(p: &Profile, ex: Vec3, ey: Vec3) -> Layout {
 /// `body` turned so `rows` (unit, square to each other) become X, Y and Z about `origin`.
 fn turned(body: &kernel::Body, rows: [Vec3; 3], origin: Vec3) -> Result<kernel::Body> {
     let [x, y, z] = rows;
-    let m = [[x.x, y.x, z.x, 0.0], [x.y, y.y, z.y, 0.0], [x.z, y.z, z.z, 0.0], [-x.dot(origin), -y.dot(origin), -z.dot(origin), 1.0]];
+    // The frame placing those axes at `origin`, its columns the axes and the origin; the body is
+    // carried by its inverse.
+    let frame = [[x.x, x.y, x.z, 0.0], [y.x, y.y, y.z, 0.0], [z.x, z.y, z.z, 0.0], [origin.x, origin.y, origin.z, 1.0]];
+    let m = kernel::affine::inverse(&frame).map_err(|e| invalid(format!("the member's axes can't be inverted: {e}")))?;
     Ok(kernel::transform_matrix(body, m)?)
+}
+
+/// `v` at unit length; `None` for no length or a number not finite.
+fn unit(v: Vec3) -> Option<Vec3> {
+    kernel::services::unit_direction(v.into()).map(Vec3::from)
 }
 
 /// Member body `name` as NC1.
@@ -210,7 +218,7 @@ pub fn member_nc1(doc: &Document, st: &ModelState, name: &str, header: &Nc1Heade
     let section = crate::frame::section(&m.region);
     let ex = if section.centroid[0] > 1e-9 * section.width.max(1.0) { -m.plane.x } else { m.plane.x };
     let lay = layout(&profile, ex, m.plane.y);
-    let x = lay.y.cross(lay.z).normalized().ok_or_else(|| invalid("the member's section has no direction"))?;
+    let x = kernel::services::member_measure::unit_normal(lay.y, lay.z).ok_or_else(|| invalid("the member's section has no direction"))?;
     let rotated = turned(&body.body, [x, lay.y, lay.z], Vec3::ZERO)?;
     let bb = rotated.exact_bounds()?;
     let ident = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
@@ -382,7 +390,7 @@ fn plate_loops(placed: &kernel::Body, face: &Face, extent: [f64; 2]) -> Result<P
         (Vec3::new(0.0, face.at, 0.0), Vec3::new(0.0, 0.0, 1.0))
     };
     let plane = Plane::new(origin, Vec3::new(1.0, 0.0, 0.0), q).ok_or_else(|| invalid("a face of the section has no plane"))?;
-    let n = plane.normal().normalized().ok_or_else(|| invalid("a face of the section has no plane"))?;
+    let n = unit(plane.normal()).ok_or_else(|| invalid("a face of the section has no plane"))?;
     // Keep the bulk of the piece, not the skin: a plane's normal is +Z on `v`/`h` and −Y on `o`/`u`.
     let positive = if face.along_y { face.at < extent[1] / 2.0 } else { face.at >= extent[0] / 2.0 };
     let (kept, _) = kernel::half_space(placed, &plane, positive)?;
@@ -392,7 +400,9 @@ fn plate_loops(placed: &kernel::Body, face: &Face, extent: [f64; 2]) -> Result<P
     let mut regions = Vec::new();
     for k in 0..rec.record().faces.len() {
         let Some((fp, out)) = crate::sheet_surface_convert::planar_face(&kept, &rec, k, tol) else { continue };
-        if out.cross(n).len() > 1e-7 || (fp.origin - origin).dot(n).abs() > tol * 10.0 {
+        if !kernel::services::member_measure::parallel(out, n, 1e-7)
+            || kernel::affine::distance_along(origin.into(), n.into(), fp.origin.into()).abs() > tol * 10.0
+        {
             continue;
         }
         let r = crate::sheet_surface_convert::face_region(&kept, &rec, &plane, out, k, tol)
@@ -535,14 +545,14 @@ fn end_angles(placed: &kernel::Body, length: f64, size: f64) -> Result<[[f64; 2]
             }
             continue;
         };
-        let Some(n) = pl.normal().normalized() else { continue };
+        let Some(n) = unit(pl.normal()) else { continue };
         if n.x.abs() < 1e-9 {
             continue;
         }
         // Pointing out of its end.
         let n = if (n.x > 0.0) == (end == 1) { n } else { -n };
         if let Some(seen) = planes.get_mut(end)
-            && !seen.iter().any(|m| m.dot(n) > 1.0 - 1e-9)
+            && !seen.iter().any(|m| kernel::affine::distance_along([0.0; 3], (*m).into(), n.into()) > 1.0 - 1e-9)
         {
             seen.push(n);
         }

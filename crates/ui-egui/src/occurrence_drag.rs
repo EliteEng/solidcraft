@@ -140,7 +140,7 @@ pub fn turn_to(app: &mut SolveApp, proj: &Proj, p: Pos2) {
     let (right, up, _) = proj.cam.basis();
     let axis = up * f64::from(travel.x) + right * f64::from(travel.y);
     let angle = f64::from(travel.length()) * TURN_PER_POINT;
-    if !at.is_finite() || !axis.is_finite() || axis.normalized().is_none() {
+    if !at.is_finite() || !axis.is_finite() || solidcraft_kernel::services::unit_direction(axis.into()).is_none() {
         return;
     }
     if let Some(d) = app.viewport.occurrence_drag.as_mut() {

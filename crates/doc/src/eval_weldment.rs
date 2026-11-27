@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use solidcore_record::{Plane, Region2, Vec2, Vec3};
 use solidcraft_kernel as kernel;
+use solidcraft_kernel::services::member_measure as measure;
 
 use super::{ModelState, val};
 use crate::expr::{Kind, Value};
@@ -41,15 +42,22 @@ pub(crate) fn member_at(doc: &Document, vals: &BTreeMap<String, Value>, st: &Mod
     member_of_feature(doc, vals, st, f, name)
 }
 
+/// `v` at unit length; `None` for no length or a number not finite.
+fn unit(v: Vec3) -> Option<Vec3> {
+    kernel::services::unit_direction(v.into()).map(Vec3::from)
+}
+
 /// [`member_at`] for a body of Frame Member `f`.
 fn member_of_feature(doc: &Document, vals: &BTreeMap<String, Value>, st: &ModelState, f: &Feature, name: &str) -> Result<MemberAt> {
     let not_member = || DocError::Invalid(format!("`{name}` is not a frame member"));
     let line = crate::frame::member_of_body(doc, st, f, name)?.ok_or_else(not_member)?;
     let (plane, len, region, _) = super::frame_member::member_section(doc, vals, f, st, &line)?;
-    let dir = plane.normal().normalized().ok_or_else(|| DocError::Invalid(format!("the member `{name}` has no direction")))?;
+    let dir = unit(plane.normal()).ok_or_else(|| DocError::Invalid(format!("the member `{name}` has no direction")))?;
     let (lo, hi) = outline_box(&region);
     let c = Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0);
-    let reach = ((hi.x - lo.x).hypot(hi.y - lo.y) / 2.0).max(1e-6);
+    // Half the section box's diagonal.
+    let diagonal = kernel::points::point_distance([lo.x, lo.y, 0.0], [hi.x, hi.y, 0.0]).map_or(0.0, |d| d.value);
+    let reach = (diagonal / 2.0).max(1e-6);
     let start = plane.origin + plane.x * c.x + plane.y * c.y;
     Ok(MemberAt { plane, len, region, start, dir, reach })
 }
@@ -84,10 +92,11 @@ pub(crate) fn outline_box(region: &Region2) -> (Vec2, Vec2) {
 /// The exact extent of `body` along direction `d`: the lowest and highest of `p·d` over it, from
 /// its exact box once turned so `d` runs along X.
 pub(crate) fn span_along(body: &kernel::Body, d: Vec3) -> Result<(f64, f64)> {
-    let x = d.normalized().ok_or_else(|| DocError::Invalid("no direction to measure along".into()))?;
+    let none = || DocError::Invalid("no direction to measure along".into());
+    let x = unit(d).ok_or_else(none)?;
     let helper = if x.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
-    let y = x.cross(helper).normalized().ok_or_else(|| DocError::Invalid("no direction to measure along".into()))?;
-    let z = x.cross(y);
+    let y = measure::unit_normal(x, helper).ok_or_else(none)?;
+    let z = measure::unit_normal(x, y).ok_or_else(none)?;
     // Column-major, its rows the new X, Y and Z axes: a point p goes to (x·p, y·p, z·p).
     let m = [[x.x, y.x, z.x, 0.0], [x.y, y.y, z.y, 0.0], [x.z, y.z, z.z, 0.0], [0.0, 0.0, 0.0, 1.0]];
     let turned = kernel::transform_matrix(body, m)?;
@@ -148,20 +157,13 @@ impl Weld {
 /// Segment `s` as weld pieces: a line or an arc exactly, another curve by its polyline within
 /// 0.01 mm.
 fn weld_pieces(s: &kernel::PathSeg) -> Vec<WeldPiece> {
-    let line = |a: Vec3, b: Vec3| WeldPiece { length: a.dist(b), centre: (a + b) * 0.5, along: (b - a).normalized() };
+    let line = |a: Vec3, b: Vec3| WeldPiece { length: a.dist(b), centre: (a + b) * 0.5, along: unit(b - a) };
     match *s {
         kernel::PathSeg::Line { a, b } => vec![line(a, b)],
-        kernel::PathSeg::Arc { a, center, axis, angle } => {
-            let r0 = a - center;
-            let radius = r0.len();
-            let (Some(k), Some(x)) = (axis.normalized(), r0.normalized()) else { return Vec::new() };
-            let y = k.cross(x);
-            let half = angle / 2.0;
-            // An arc's centroid is on its bisector, r·sin(θ/2)/(θ/2) from the centre.
-            let reach = if half.abs() > 1e-12 { radius * half.sin() / half } else { radius };
-            let mid = x * half.cos() + y * half.sin();
-            vec![WeldPiece { length: radius * angle.abs(), centre: center + mid * reach, along: None }]
-        }
+        kernel::PathSeg::Arc { a, center, axis, angle } => match measure::arc_centroid(a, center, axis, angle) {
+            Some((length, centre)) => vec![WeldPiece { length, centre, along: None }],
+            None => Vec::new(),
+        },
         _ => kernel::path_polyline(std::slice::from_ref(s)).map(|pts| pts.windows(2).map(|w| line(w[0], w[1])).collect()).unwrap_or_default(),
     }
 }
@@ -169,37 +171,11 @@ fn weld_pieces(s: &kernel::PathSeg) -> Vec<WeldPiece> {
 /// Exact distance from `p` to segment `s` (a line or an arc in closed form; another curve by its
 /// polyline within 0.01 mm).
 fn seg_distance(s: &kernel::PathSeg, p: Vec3) -> f64 {
-    let to_line = |a: Vec3, b: Vec3| {
-        let d = b - a;
-        let l = d.dot(d);
-        let t = if l > 0.0 { ((p - a).dot(d) / l).clamp(0.0, 1.0) } else { 0.0 };
-        p.dist(a + d * t)
-    };
     match *s {
-        kernel::PathSeg::Line { a, b } => to_line(a, b),
-        kernel::PathSeg::Arc { a, center, axis, angle } => {
-            let Some(k) = axis.normalized() else { return p.dist(a) };
-            let r0 = a - center;
-            let radius = r0.len();
-            let q = p - center;
-            let flat = q - k * q.dot(k);
-            let (x, y) = (r0.normalized(), k.cross(r0).normalized());
-            let (Some(x), Some(y)) = (x, y) else { return p.dist(a) };
-            let mut t = flat.dot(y).atan2(flat.dot(x));
-            // The angle within the arc's sweep, else the nearer end.
-            let (lo, hi) = if angle >= 0.0 { (0.0, angle) } else { (angle, 0.0) };
-            let tau = std::f64::consts::TAU;
-            while t < lo {
-                t += tau;
-            }
-            while t > hi + 1e-12 && t - tau >= lo - 1e-12 {
-                t -= tau;
-            }
-            let at = |t: f64| center + (x * t.cos() + y * t.sin()) * radius;
-            if t <= hi { p.dist(at(t)) } else { p.dist(at(lo)).min(p.dist(at(hi))) }
-        }
+        kernel::PathSeg::Line { a, b } => measure::segment_distance(a, b, p),
+        kernel::PathSeg::Arc { a, center, axis, angle } => measure::arc_distance(a, center, axis, angle, p).unwrap_or_else(|| p.dist(a)),
         _ => kernel::path_polyline(std::slice::from_ref(s))
-            .map(|pts| pts.windows(2).map(|w| to_line(w[0], w[1])).fold(f64::INFINITY, f64::min))
+            .map(|pts| pts.windows(2).map(|w| measure::segment_distance(w[0], w[1], p)).fold(f64::INFINITY, f64::min))
             .unwrap_or(f64::INFINITY),
     }
 }
@@ -312,48 +288,6 @@ pub struct MemberCut {
     pub coped: [bool; 2],
 }
 
-/// How wide `region` is across direction `w` (a unit vector in its plane): exact for lines and
-/// arcs, a curve by its control points.
-fn width_across(region: &Region2, w: Vec2) -> f64 {
-    use solidcore_record::Seg2;
-    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    let mut add = |v: f64| {
-        if v.is_finite() {
-            lo = lo.min(v);
-            hi = hi.max(v);
-        }
-    };
-    let dot = |p: Vec2| p.x * w.x + p.y * w.y;
-    for g in &region.outer.segs {
-        match g {
-            Seg2::Line { a, b } => {
-                add(dot(*a));
-                add(dot(*b));
-            }
-            Seg2::Arc { center, radius, start, sweep } => {
-                // The arc's ends, and where it reaches furthest along ±w if that lies on it.
-                let at = |t: f64| Vec2::new(center.x + radius * t.cos(), center.y + radius * t.sin());
-                add(dot(at(*start)));
-                add(dot(at(start + sweep)));
-                let face = w.y.atan2(w.x);
-                for t in [face, face + std::f64::consts::PI] {
-                    let mut d = (t - start).rem_euclid(std::f64::consts::TAU);
-                    if *sweep < 0.0 {
-                        d -= std::f64::consts::TAU;
-                    }
-                    if (sweep.abs() - d.abs()) >= 0.0 && d * sweep >= 0.0 {
-                        add(dot(at(t)));
-                    }
-                }
-            }
-            Seg2::Cubic { p0, p1, p2, p3 } => [*p0, *p1, *p2, *p3].into_iter().for_each(|p| add(dot(p))),
-            Seg2::Conic { a, apex, b, .. } => [*a, *apex, *b].into_iter().for_each(|p| add(dot(p))),
-            Seg2::Bezier { n, p } => p.get(..=usize::from(*n)).unwrap_or(p).iter().for_each(|p| add(dot(*p))),
-        }
-    }
-    if hi >= lo { hi - lo } else { 0.0 }
-}
-
 /// The members of Frame Member `f` as built in `st`, measured on their bodies: each one's lengths
 /// and end cuts, in the order the feature makes its bodies. A body that is no member of `f` any
 /// more (an End Cap's) is passed over.
@@ -384,29 +318,25 @@ pub fn member_cuts_report(doc: &Document, st: &ModelState, f: &Feature) -> Resul
         for k in 0..b.body.face_count() {
             // Where the face lies along the member, from its edges' exact points.
             let pts: Vec<Vec3> = b.body.face_edge_polylines(k).into_iter().flatten().collect();
-            let (flo, fhi) = pts.iter().map(|p| p.dot(m.dir)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, z), t| (a.min(t), z.max(t)));
+            let along = |p: Vec3| kernel::affine::distance_along([0.0; 3], m.dir.into(), p.into());
+            let (flo, fhi) = pts.iter().map(|p| along(*p)).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, z), t| (a.min(t), z.max(t)));
             let plane = b.body.planar_face(k);
-            let leaning = plane.and_then(|pl| pl.normal().normalized()).filter(|n| n.dot(m.dir).abs() > 1e-9);
-            match leaning {
-                Some(n) => {
+            match plane.and_then(|pl| measure::end_cut(pl.normal(), m.dir, m.plane.x, m.plane.y)) {
+                Some(cut) => {
                     // An end face: its outward normal points out of the end it is on.
-                    let e = usize::from(n.dot(m.dir) > 0.0);
-                    if normals[e].iter().any(|x| x.dot(n) > 1.0 - 1e-9) {
+                    let e = usize::from(cut.at_end);
+                    // Unit normals: their projection on each other is the cosine between them.
+                    if normals[e].iter().any(|x| kernel::affine::distance_along([0.0; 3], (*x).into(), cut.normal.into()) > 1.0 - 1e-9) {
                         continue;
                     }
-                    normals[e].push(n);
-                    let c = n.dot(m.dir).abs().min(1.0);
-                    let angle = c.acos().to_degrees();
+                    normals[e].push(cut.normal);
+                    let angle = cut.angle.to_degrees();
                     if angle < 1e-7 {
                         continue;
                     }
-                    let (nx, ny) = (n.dot(m.plane.x), n.dot(m.plane.y));
-                    let side = nx.hypot(ny);
-                    let towards = (-ny).atan2(-nx).to_degrees();
-                    ends[e].push(EndCut { angle, towards });
-                    if side > 1e-12 {
-                        let w = Vec2::new(nx / side, ny / side);
-                        drop[e] = drop[e].max(width_across(&m.region, w) * side / c);
+                    ends[e].push(EndCut { angle, towards: cut.towards.to_degrees() });
+                    if let Some(w) = cut.across {
+                        drop[e] = drop[e].max(measure::width_across(&m.region.outer, w) * cut.side / cut.cos);
                     }
                 }
                 None if flo.is_finite() && fhi - flo < length * 0.5 => {

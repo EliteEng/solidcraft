@@ -105,8 +105,10 @@ fn weld(s: &mut Session, p: &Value) -> Result<Value> {
 /// `body` turned so `rows` (unit, square to each other) become X, Y and Z about `origin`.
 fn turned(body: &crate::kernel::Body, rows: [solidcore_record::Vec3; 3], origin: solidcore_record::Vec3) -> Result<crate::kernel::Body> {
     let [x, y, z] = rows;
-    // Column-major: a point p goes to (x·(p−origin), y·(p−origin), z·(p−origin)).
-    let m = [[x.x, y.x, z.x, 0.0], [x.y, y.y, z.y, 0.0], [x.z, y.z, z.z, 0.0], [-x.dot(origin), -y.dot(origin), -z.dot(origin), 1.0]];
+    // The frame placing those axes at `origin` (column-major, its columns the axes and the origin); the body is carried
+    // by its inverse, so a point p goes to (x·(p−origin), y·(p−origin), z·(p−origin)).
+    let frame = [[x.x, x.y, x.z, 0.0], [y.x, y.y, y.z, 0.0], [z.x, z.y, z.z, 0.0], [origin.x, origin.y, origin.z, 1.0]];
+    let m = solidcraft_kernel::affine::inverse(&frame).map_err(|e| crate::EngineError::Other(format!("the member's axes can't be inverted: {e}")))?;
     Ok(crate::kernel::transform_matrix(body, m)?)
 }
 
@@ -182,7 +184,7 @@ fn face_normal(body: &solidcraft_doc::ModelBody, point: [f64; 3], cmd: &str, whi
     let p = solidcore_record::Vec3::new(point[0], point[1], point[2]);
     let k = solidcraft_doc::appearance::face_index_at(body, p).ok_or_else(|| bad(cmd, format!("`{which}` is not on a face of `{}`", body.name)))?;
     let pl = body.body.planar_face(k).ok_or_else(|| bad(cmd, format!("the `{which}` face is not flat")))?;
-    pl.x.cross(pl.y).normalized().ok_or_else(|| bad(cmd, format!("the `{which}` face has no direction")))
+    solidcraft_kernel::services::member_measure::unit_normal(pl.x, pl.y).ok_or_else(|| bad(cmd, format!("the `{which}` face has no direction")))
 }
 
 /// `s` moved by `v` on the sheet.
@@ -200,7 +202,7 @@ fn export_member_dxf(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.model.state();
     let body = st.body(&a.body).ok_or_else(|| bad(cmd, format!("no body `{}`", a.body)))?;
     let (top, front) = (face_normal(body, a.top, cmd, "top")?, face_normal(body, a.front, cmd, "front")?);
-    if top.dot(front).abs() > 1e-6 {
+    if solidcraft_kernel::affine::distance_along([0.0; 3], top.into(), front.into()).abs() > 1e-6 {
         return Err(bad(cmd, "the top and front faces must be square to each other"));
     }
     let record = crate::kernel::brep_record(&body.body)?;

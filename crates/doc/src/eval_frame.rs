@@ -1064,7 +1064,9 @@ fn plans(
         // The plan's pieces: the end's piece, and the piece of the line it lands on that holds the end.
         let Some(end) = segments.get(m).map(|(_, a, b)| if at_start { *a } else { *b }) else { continue };
         let Some((_, c, d)) = segments.get(span) else { continue };
-        let t = (end - *c).dot(*d - *c) / (*d - *c).dot(*d - *c);
+        // Where the end lies along the line it lands on, 0 at its start and 1 at its end.
+        let dir: [f64; 3] = (*d - *c).into();
+        let t = kernel::affine::distance_along((*c).into(), dir, end.into()) / kernel::affine::distance_along((*c).into(), dir, (*d).into());
         let piece = |line: usize, holds: &dyn Fn(&frame_layout::Piece) -> bool| plan.pieces.iter().position(|p| p.parent == line && holds(p));
         let mine = piece(m, &|p| if at_start { p.from <= 0.0 } else { p.to >= 1.0 });
         let theirs = piece(span, &|p| p.from <= t && t <= p.to);

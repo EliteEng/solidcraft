@@ -22,6 +22,7 @@ pub mod faces_continue;
 pub mod flush_contact;
 mod line_meeting;
 pub mod r#loop;
+pub mod member_measure;
 pub mod normal;
 mod planar_disjoint;
 pub mod point_identity;

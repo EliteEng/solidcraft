@@ -7,7 +7,6 @@
 use serde_json::Value;
 use solidcore_record::Vec3;
 use solidcraft_doc::{mat_inverse, mat_mul};
-use solidcraft_geom::prelude::*;
 
 use super::{move_vector, occurrence, occurrence_path, translation, valid_position};
 use crate::params::bad;
@@ -132,7 +131,7 @@ pub(super) fn drag(s: &mut Session, p: &Value) -> Result<Value> {
         translation(t)
     } else {
         let axis = move_vector(p, "axis", Vec3::Z, false, cmd)?;
-        if !axis.is_finite() || axis.normalized().is_none() {
+        if !axis.is_finite() || solidcraft_kernel::services::unit_direction(axis.into()).is_none() {
             return Err(bad(cmd, "`axis` must have a finite nonzero length"));
         }
         solidcraft_doc::rigid(t, at, axis, angle)
